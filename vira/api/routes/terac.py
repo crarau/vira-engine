@@ -31,6 +31,11 @@ from sqlalchemy import text as sql
 from vira import terac
 from vira.api import store
 from vira.api.db import connection
+
+# Private on purpose, and imported anyway. The link Terac hands a panellist has
+# to be byte-identical to the one POST /v1/review-batches returns — a second
+# implementation of the same precedence rule is a link that silently rots the
+# day someone sets VIRA_JUDGE_BASE_URL.
 from vira.api.routes.reviews import _judge_url
 
 log = logging.getLogger(__name__)

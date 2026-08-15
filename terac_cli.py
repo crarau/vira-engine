@@ -142,7 +142,13 @@ async def cmd_launch(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="terac_cli.py", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="terac_cli.py",
+        description=__doc__,
+        # The docstring is a worked example list; reflowing it turns the
+        # commands into a paragraph nobody can copy a line out of.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="org, balance, opportunities").set_defaults(fn=cmd_status)
