@@ -71,9 +71,16 @@ async def score_remix(
 
     def clamp(key: str) -> float:
         try:
-            return max(0.0, min(5.0, float(data.get(key, 0))))
+            v = float(data.get(key, 0))
         except (TypeError, ValueError):
             return 0.0
+        # NaN compares False against everything, so min/max would hand it straight
+        # back as 5.0 — a perfect score on a dimension the model never gave one
+        # for. `json.loads` accepts the bare literal `NaN`, so this is reachable,
+        # and on `evidence` it would walk the concept through the gate.
+        if v != v:
+            return 0.0
+        return max(0.0, min(5.0, v))
 
     return Score(
         relevance=clamp("relevance"),

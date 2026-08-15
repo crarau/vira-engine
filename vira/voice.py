@@ -57,12 +57,13 @@ def direct(remix: Remix, lane=None) -> str:
     closing = lane.closing if lane else CLOSING
     middle = (lane.middle if lane and lane.middle else MIDDLE)
 
-    n = len(remix.beats)
+    # Position is counted over the beats that are actually spoken. Counting over
+    # every beat means a blank first or last beat silently steals the opening or
+    # closing tag, and the ad opens flat or ends without the CTA being hit.
+    lines = [b for b in remix.beats if b.say.strip()]
+    n = len(lines)
     parts: list[str] = []
-    for i, beat in enumerate(remix.beats):
-        line = beat.say.strip()
-        if not line:
-            continue
+    for i, beat in enumerate(lines):
         # The director's own choice wins; the lane palette is the fallback.
         if beat.delivery:
             tag = beat.delivery
@@ -72,7 +73,7 @@ def direct(remix: Remix, lane=None) -> str:
             tag = closing
         else:
             tag = middle[(i - 1) % len(middle)]
-        parts.append(f"{tag} {line}")
+        parts.append(f"{tag} {beat.say.strip()}")
     return " ".join(parts)
 
 

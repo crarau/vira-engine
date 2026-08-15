@@ -1,0 +1,63 @@
+# Postgres for the API's own database — jobs, media rows, API keys.
+#
+# This is NOT the corpus database. The corpus lives in Lovable Cloud and is
+# reachable only over PostgREST (see docs/BUILD-LOG.md — there is no
+# postgres:// for it and there never will be). This instance exists so the API
+# has somewhere to keep state that belongs to the API: a job row that survives
+# a restart, a media manifest, a rate-limit counter.
+#
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/vira-api.env up -d
+#
+# The env file is gitignored and written by deploy/setup.sh.
+
+name: vira
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vira-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vira
+      POSTGRES_DB: vira
+      # No default, deliberately. A compose file that boots with a fallback
+      # password is a compose file that eventually runs in production with the
+      # fallback password. Missing env var = refuse to start.
+      POSTGRES_PASSWORD: ${VIRA_DB_PASSWORD:?VIRA_DB_PASSWORD is not set - run deploy/setup.sh, or pass --env-file deploy/vira-api.env}
+      # Postgres only ever sees connections from this host, so the extra
+      # round-trips of scram over a loopback socket are cheap insurance
+      # against a future container on the same docker bridge.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      # 127.0.0.1 ONLY. This box has a public IP (20.63.66.52) and its NSG is
+      # not a substitute for binding correctly — 0.0.0.0:5432 here would put an
+      # internet-facing Postgres one weak password away from the corpus.
+      #
+      # 15432, not 5432: the box already runs other people's containers
+      # (mentorly-backend-db_test-1 among them) and 5432 is the first thing they
+      # take. 15432 is also below 32768, which matters more than it looks —
+      # Linux hands out ephemeral source ports from 32768-60999, so a "clever"
+      # choice like 55432 can fail to bind because an outbound connection
+      # borrowed it thirty seconds earlier.
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -U/-d are not optional here: bare pg_isready checks the *root* user and
+      # reports healthy while the vira role is still being created by initdb.
+      test: ["CMD-SHELL", "pg_isready -U vira -d vira -q"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    logging:
+      # Seven GitHub Actions runners share this box's disk. An unbounded json
+      # log on a container that never stops is how a 2 TB disk fills up.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+    name: vira-pgdata

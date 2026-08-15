@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =============================================================================
+# vira-engine API - chipdev deployment
+# =============================================================================
+# Brings up (or re-converges) the API on the chipdev box. Idempotent by
+# construction: every step checks the world before changing it, so this is the
+# deploy script as well as the installer. Run it after every pull.
+#
+# Usage: ./deploy/setup.sh
+#
+#   ssh chipdev
+#   cd ~/vira-engine && git pull && ./deploy/setup.sh
+#
+# What it does NOT do: create DNS, create the Cloudflare Tunnel, or install
+# cloudflared. Those are Terraform-managed in ideaplaces-devops and deliberately
+# out of a per-project script's hands — see deploy/cloudflared/vira-tunnel.tf.
+# This script only verifies the edge is wired and tells you what is missing.
+# =============================================================================
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step()    { echo -e "\n${BLUE}==>${NC} $1"; }
+die()         { log_error "$1"; exit 1; }
+
+# Configuration
+PYTHON_VERSION="3.12"
+PY="python${PYTHON_VERSION}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="${REPO}/.venv"
+ENV_FILE="${REPO}/deploy/vira-api.env"
+COMPOSE="${REPO}/deploy/docker-compose.yml"
+SCHEMA="${REPO}/sql/schema.sql"
+UNIT_SRC="${REPO}/deploy/vira-api.service"
+UNIT_DST="/etc/systemd/system/vira-api.service"
+DROPIN_DIR="/etc/systemd/system/vira-api.service.d"
+APP_PORT=8720
+DB_PORT=15432
+PUBLIC_HOST="vira.ideaplaces.com"
+
+[[ "$(id -un)" == "chipdev" ]] \
+    || die "run as chipdev, not $(id -un) - the unit and every path below assume that account"
+sudo -n true 2>/dev/null || log_warning "sudo will prompt (the apt and systemd steps need it)"
+
+# =============================================================================
+# 1. Python 3.12
+# =============================================================================
+# The box ships 3.10 and the models will not import under it. deadsnakes
+# installs alongside the system python and does not touch /usr/bin/python3, so
+# nothing else on this shared box notices.
+log_step "Python ${PYTHON_VERSION}"
+if command -v "$PY" >/dev/null 2>&1; then
+    log_info "already present: $("$PY" --version)"
+else
+    log_info "not found (system python is $(python3 --version 2>&1)) - installing via deadsnakes"
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt-get update -qq
+    sudo apt-get install -y "python${PYTHON_VERSION}" "python${PYTHON_VERSION}-venv" "python${PYTHON_VERSION}-dev"
+    log_success "installed $("$PY" --version)"
+fi
+
+# =============================================================================
+# 2. Virtualenv and dependencies
+# =============================================================================
+# Rebuild rather than reuse if the venv is on an older interpreter. A venv built
+# against 3.10 keeps working for pip and fails at import time, which is a
+# confusing way to find out.
+log_step "virtualenv at ${VENV}"
+if [[ -x "${VENV}/bin/python" ]]; then
+    have="$("${VENV}/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+    if [[ "$have" != "$PYTHON_VERSION" ]]; then
+        log_warning "existing venv is ${have}, rebuilding on ${PYTHON_VERSION}"
+        rm -rf "$VENV"
+    else
+        log_info "reusing venv on ${have}"
+    fi
+fi
+[[ -x "${VENV}/bin/python" ]] || { log_info "creating"; "$PY" -m venv "$VENV"; }
+
+"${VENV}/bin/pip" install --quiet --upgrade pip
+"${VENV}/bin/pip" install --quiet -r "${REPO}/requirements.txt"
+log_info "$("${VENV}/bin/pip" list --format=freeze | wc -l) packages installed"
+
+# The unit runs uvicorn out of this venv. If requirements.txt has not caught up
+# with the API work, fail here with a sentence rather than at systemd start with
+# a bare 203/EXEC.
+"${VENV}/bin/python" -c 'import uvicorn, fastapi' 2>/dev/null \
+    || die "uvicorn/fastapi are not in the venv - add them to requirements.txt and re-run"
+
+# =============================================================================
+# 3. Environment file
+# =============================================================================
+# Generated, never committed (.gitignore carries deploy/*.env). The DB password
+# is generated once and reused forever: the API and Postgres must agree on it,
+# and the surest way to make them agree is for one script to write both lines.
+log_step "env file ${ENV_FILE}"
+if [[ -f "$ENV_FILE" ]]; then
+    log_info "exists, leaving it alone"
+else
+    log_info "creating with a generated DB password and empty secret slots"
+    db_pass="$(openssl rand -hex 24)"
+    umask 077
+    cat > "$ENV_FILE" <<EOF
+# Generated by deploy/setup.sh. Gitignored, mode 0600. Never commit this.
+#
+# Application secrets come from Azure Key Vault kv-zerohuman-hack:
+#   az keyvault secret show --vault-name kv-zerohuman-hack --name <name> --query value -o tsv
+# The name for each is in deploy/README.md.
+
+# --- this service's Postgres (docker compose, loopback only) ---------------
+VIRA_DB_PASSWORD=${db_pass}
+API_DATABASE_URL=postgresql://vira:${db_pass}@127.0.0.1:${DB_PORT}/vira
+
+# --- public identity (behind the Cloudflare Tunnel) ------------------------
+VIRA_PUBLIC_URL=https://${PUBLIC_HOST}
+
+# --- Lovable Cloud corpus (publishable key, public by design) --------------
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+AGENT_EMAIL=
+AGENT_PASSWORD=
+AGENT_USER_ID=
+
+# --- models and media ------------------------------------------------------
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+ELEVENLABS_API_KEY=
+AZURE_OPENAI_ENDPOINT=
+AZURE_OPENAI_API_KEY=
+
+# --- hackathon -------------------------------------------------------------
+STRIPE_SECRET_KEY=
+TERAC_API_KEY=
+
+LOG_LEVEL=INFO
+EOF
+    log_success "written - fill the empty values before the first real request"
+fi
+chmod 600 "$ENV_FILE"
+
+grep -q '^VIRA_DB_PASSWORD=.\+' "$ENV_FILE" \
+    || die "VIRA_DB_PASSWORD is empty in ${ENV_FILE} - Postgres will refuse to start"
+
+# =============================================================================
+# 4. Postgres
+# =============================================================================
+log_step "Postgres 16 (docker compose project 'vira')"
+command -v docker >/dev/null 2>&1 || die "docker is not on PATH"
+docker compose -f "$COMPOSE" --env-file "$ENV_FILE" up -d
+
+log_info "waiting for the healthcheck"
+status=starting
+for _ in $(seq 1 60); do
+    status="$(docker inspect -f '{{.State.Health.Status}}' vira-postgres 2>/dev/null || echo starting)"
+    [[ "$status" == "healthy" ]] && break
+    sleep 2
+done
+[[ "$status" == "healthy" ]] || die "vira-postgres never became healthy - docker logs vira-postgres"
+log_success "healthy on 127.0.0.1:${DB_PORT}"
+
+# =============================================================================
+# 5. Schema
+# =============================================================================
+# Applied on every run, so schema.sql must be idempotent (CREATE TABLE IF NOT
+# EXISTS, CREATE OR REPLACE). ON_ERROR_STOP turns a mid-file failure into a
+# non-zero exit instead of a half-applied schema and a cheerful green tick.
+log_step "schema"
+[[ -f "$SCHEMA" ]] \
+    || die "${SCHEMA} not found. The API owns that file - pull the branch that has it before deploying."
+docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -q -U vira -d vira < "$SCHEMA"
+tables="$(docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T postgres \
+    psql -tAX -U vira -d vira -c "select count(*) from information_schema.tables where table_schema='public'")"
+log_success "applied - ${tables//[[:space:]]/} tables in public"
+
+# =============================================================================
+# 6. systemd
+# =============================================================================
+log_step "systemd unit"
+if [[ -f "$UNIT_DST" ]] && cmp -s "$UNIT_SRC" "$UNIT_DST"; then
+    log_info "unit unchanged"
+else
+    log_info "installing ${UNIT_DST}"
+    sudo install -m 0644 "$UNIT_SRC" "$UNIT_DST"
+fi
+
+# PATH drop-in. Remotion shells out to npx, and a systemd service does not
+# inherit the login shell's nvm setup - without this, renders fail with
+# "npx: not found" AFTER the job was accepted and returned 202. Resolve the
+# real bin directory here, on the box, rather than hardcoding an nvm version
+# that changes under us.
+node_bin="$(dirname "$(command -v node || true)" 2>/dev/null || true)"
+if [[ -n "$node_bin" && -x "${node_bin}/node" ]]; then
+    log_info "node $("${node_bin}/node" --version) at ${node_bin}"
+    sudo mkdir -p "$DROPIN_DIR"
+    printf '[Service]\nEnvironment=PATH=%s:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' \
+        "$node_bin" | sudo tee "${DROPIN_DIR}/10-node-path.conf" >/dev/null
+else
+    log_warning "node not found on PATH - renders will fail with 'npx: not found'"
+fi
+
+sudo systemctl daemon-reload
+sudo systemctl enable vira-api >/dev/null
+sudo systemctl restart vira-api
+
+# =============================================================================
+# 7. Health
+# =============================================================================
+log_step "health"
+sleep 3
+code=000
+for _ in $(seq 1 20); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${APP_PORT}/health" || echo 000)"
+    [[ "$code" == "200" ]] && break
+    sleep 2
+done
+if [[ "$code" == "200" ]]; then
+    log_success "http://127.0.0.1:${APP_PORT}/health -> 200"
+else
+    log_error "API is not answering (last code: ${code})"
+    sudo systemctl status vira-api --no-pager -l | tail -25
+    die "see: journalctl -u vira-api -n 100 --no-pager"
+fi
+
+# =============================================================================
+# 8. Edge (Cloudflare Tunnel) - verify only, never create
+# =============================================================================
+# DNS and tunnel resources belong to Terraform in ideaplaces-devops. Creating
+# them from here would work once and then be reverted by the next apply, so
+# this step only reports.
+log_step "edge: https://${PUBLIC_HOST}"
+if systemctl is-active --quiet cloudflared; then
+    log_info "cloudflared daemon is active"
+else
+    log_warning "cloudflared is not active on this box - the hostname cannot answer"
+fi
+
+edge="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://${PUBLIC_HOST}/health" || echo 000)"
+case "$edge" in
+    200) log_success "https://${PUBLIC_HOST}/health -> 200" ;;
+    000) log_warning "${PUBLIC_HOST} does not resolve or answer yet - add the ingress rule and DNS record from deploy/cloudflared/vira-tunnel.tf, then terraform apply in ideaplaces-devops" ;;
+    530|502) log_warning "edge returned ${edge} - Cloudflare has the hostname but the tunnel is not reaching localhost:${APP_PORT}. Check the ingress rule's port." ;;
+    *)   log_warning "edge returned ${edge}" ;;
+esac
+
+# =============================================================================
+# 9. Don't-break-the-neighbours check
+# =============================================================================
+# Seven Actions runner services share this box. If a deploy ever knocks one
+# over it should be visible in the same breath, not discovered by a red CI run.
+log_step "GitHub Actions runners (all must be active)"
+systemctl list-units 'actions.runner.*' --no-legend --no-pager \
+    | awk '{printf "    %-58s %s\n", $1, $4}'
+
+log_step "done"
+log_info "logs:   journalctl -u vira-api -f"
+log_info "edge:   sudo journalctl -u cloudflared -f"
+log_info "db:     docker compose -f deploy/docker-compose.yml --env-file deploy/vira-api.env exec postgres psql -U vira -d vira"
+log_info "next:   fill the empty keys in deploy/vira-api.env, then sudo systemctl restart vira-api"

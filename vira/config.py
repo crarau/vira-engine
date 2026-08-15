@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # The agent's auth.users id — RLS matches it against companies.owner_id.
     agent_user_id: str | None = None
 
+    # --- this service's own Postgres -------------------------------------
+    # Not Lovable Cloud. The REST API owns its own database (jobs, videos,
+    # recipes, review); Lovable Cloud stays read-only and reachable only over
+    # PostgREST. Unset means the API layer is not configured — the pipeline
+    # itself runs without it.
+    api_database_url: str | None = None
+
     # --- selection ------------------------------------------------------
     # A 2021 mop video is not a trend, however many views it has.
     max_age_days: int = 90
@@ -36,12 +43,19 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     llm_model: str = "claude-sonnet-5"
 
+    # --- agentic crew -----------------------------------------------------
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_key: str | None = None
+    agent_model: str = "gpt-5.4"
+
     # --- imagery ---------------------------------------------------------
     # "gemini" generates the written frame; "stock" searches Openverse for an
     # approximation of it. Generation wins on relevance by a wide margin.
     image_source: str = "gemini"
     gemini_api_key: str | None = None
     image_model: str = "gemini-3.1-flash-image"
+    # Vision, for COHESION: reads back what the generated frames ACTUALLY show.
+    vision_model: str = "gemini-3.5-flash"
 
     # --- voice / render --------------------------------------------------
     elevenlabs_api_key: str | None = None

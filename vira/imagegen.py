@@ -148,22 +148,33 @@ async def _one(
 
 
 async def generate_shots(
-    company: Company, product: str, remix: Remix, dest: Path, look: str = ""
+    company: Company, product: str, remix: Remix, dest: Path, look: str = "",
+    style: str | None = None, name_offset: int = 0,
 ) -> list[dict]:
-    """One generated photograph per beat. Falls back to stock per failed beat."""
+    """One generated photograph per beat. Falls back to stock per failed beat.
+
+    `style` pins the contract instead of deriving a fresh one. Regenerating a
+    single frame MUST pass the original contract — otherwise each fix invents a
+    new look, the corrected frame no longer matches its neighbours, and the
+    cohesion loop chases its own tail. That is not hypothetical: it cost the
+    Director six turns before this argument existed.
+    """
     s = settings()
     if not s.gemini_api_key:
         raise ImageGenError("GEMINI_API_KEY is not set")
 
-    style, prompts = await derive_prompts(company, product, remix, look)
-    log.info("style contract: %s", style)
+    if style:
+        _, prompts = await derive_prompts(company, product, remix, look)
+    else:
+        style, prompts = await derive_prompts(company, product, remix, look)
+        log.info("style contract: %s", style)
 
     full = [f"{style} {p} {NEGATIVE}" for p in prompts]
 
     async with httpx.AsyncClient(timeout=180) as client:
         results = await asyncio.gather(
             *(
-                _one(client, s.image_model, s.gemini_api_key, prompt, dest, f"shot{i:02d}.jpg")
+                _one(client, s.image_model, s.gemini_api_key, prompt, dest, f"shot{i + name_offset:02d}.jpg")
                 for i, prompt in enumerate(full)
             ),
             return_exceptions=True,
