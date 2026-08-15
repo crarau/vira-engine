@@ -1,0 +1,280 @@
+<!doctype html>
+<!--
+  watch.html — the reference client for GET /v1/jobs/{id}/stream.
+
+  One file, no dependencies, no build step. Open it from disk, paste an API base
+  URL and a job id, and watch the agent work. It exists to be read and copied:
+  every piece of the streaming contract a frontend has to get right is in here
+  once, with the reason next to it.
+
+  The part worth copying is about ten lines, and it is marked CORE below. The
+  rest is presentation.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vira · watch a job</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d0f13; --panel: #14181f; --line: #232a35;
+    --ink: #e6eaf0; --dim: #8b97a8; --faint: #5d6878;
+    --accent: #6ea8fe; --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 22px; }
+  form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 14px; }
+  input, button {
+    font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink);
+  }
+  input::placeholder { color: var(--faint); }
+  input:focus { outline: none; border-color: var(--accent); }
+  button { background: var(--accent); color: #08111f; border-color: transparent; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--dim); border-color: var(--line); font-weight: 500; }
+
+  .bar {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    font-size: 13px; margin-bottom: 14px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.live { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.retry { background: var(--warn); }
+  .dot.dead { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .bar .spacer { margin-left: auto; }
+  .bar code { font-family: var(--mono); color: var(--dim); font-size: 12px; }
+
+  ol { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: grid; grid-template-columns: 52px 92px 1fr; gap: 12px; align-items: baseline;
+    padding: 8px 14px; border-left: 2px solid transparent;
+    animation: in .22s ease-out;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(-3px); } }
+  li + li { border-top: 1px solid #1a1f28; }
+  li.warn { border-left-color: var(--warn); }
+  li.error { border-left-color: var(--err); }
+  li.gap { grid-template-columns: 1fr; color: var(--warn); font-size: 12px; }
+  .t { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .stage {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--accent);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .msg { white-space: pre-wrap; word-break: break-word; }
+  li.warn .msg { color: var(--warn); }
+  li.error .msg { color: var(--err); }
+  .meta { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+
+  .result {
+    margin-top: 18px; padding: 16px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .result.ok { border-color: #245c3a; }
+  .result.bad { border-color: #5c2424; }
+  .result h2 { font-size: 15px; margin: 0 0 8px; }
+  .result video { width: 100%; max-width: 300px; border-radius: 8px; margin-top: 12px; display: block; }
+  .result a { color: var(--accent); }
+  .empty { color: var(--faint); padding: 26px 14px; text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>vira · watch a job</h1>
+  <p class="sub">
+    Live trace over Server-Sent Events. Generation is 74–350&nbsp;seconds; this is
+    what the agent is doing while you wait.
+  </p>
+
+  <form id="f">
+    <input id="base" placeholder="http://localhost:8000" spellcheck="false">
+    <input id="job" placeholder="job id (uuid)" spellcheck="false">
+    <button id="go">Watch</button>
+  </form>
+
+  <div class="bar">
+    <span class="dot" id="dot"></span>
+    <span id="state">idle</span>
+    <code id="src"></code>
+    <span class="spacer"></span>
+    <code id="clock">0:00</code>
+    <button class="ghost" id="stop" disabled>Stop</button>
+  </div>
+
+  <ol id="trace"></ol>
+  <div class="empty" id="empty">Paste a job id and press Watch.</div>
+  <div id="result"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// CORE — this is the whole client contract. Everything below it is UI.
+//
+//   const es = new EventSource(`${base}/v1/jobs/${jobId}/stream`);
+//   es.onmessage = (m) => {
+//     const e = JSON.parse(m.data);            // {seq, ts, job_id, stage, message, level, data}
+//     render(e);
+//     if (e.stage === "done" || e.stage === "failed") es.close();
+//   };
+//
+// Three things that are easy to get wrong:
+//   * Every event arrives on `onmessage`, terminal ones included. They are not
+//     named SSE events, so one handler sees the entire run. Branch on `stage`.
+//   * The browser reconnects on its own and replays from `Last-Event-ID`. Do
+//     not close on `onerror` — that is usually a reconnect in progress, and
+//     closing turns a blip into a dead page.
+//   * The stream ends itself after 15 minutes. The browser reconnects and
+//     resumes; you do not need to do anything about it.
+// ---------------------------------------------------------------------------
+
+const $ = (id) => document.getElementById(id);
+const trace = $("trace");
+
+let es = null, started = 0, ticker = null, lastSeq = 0, jobId = "";
+
+// Stage → what to call it in the UI. Unknown stages fall through to the raw
+// name rather than being dropped: the vocabulary grows, and a UI that only
+// renders stages it was taught about goes blank on the next release.
+const STAGE_LABEL = {
+  queued: "queued", select: "corpus", verify: "verify", analyze: "analyse",
+  plan: "plan", write: "script", motion: "motion", critique: "critique",
+  voice: "voice", imagery: "imagery", cohesion: "cohesion", tool: "director",
+  director: "director", crew: "crew", score: "gate", render: "render",
+  done: "done", failed: "failed",
+};
+
+$("base").value = location.protocol.startsWith("http") ? location.origin : "http://localhost:8000";
+$("job").value = new URLSearchParams(location.search).get("job") || "";
+
+$("f").addEventListener("submit", (ev) => { ev.preventDefault(); start(); });
+$("stop").addEventListener("click", () => stop("stopped"));
+if ($("job").value) start();
+
+function start() {
+  stop();
+  jobId = $("job").value.trim();
+  const base = $("base").value.trim().replace(/\/$/, "");
+  if (!jobId || !base) return;
+
+  trace.innerHTML = "";
+  $("result").innerHTML = "";
+  $("empty").style.display = "none";
+  lastSeq = 0;
+  started = Date.now();
+  clearInterval(ticker);
+  ticker = setInterval(tick, 1000);
+  $("stop").disabled = false;
+  setState("connecting", "");
+
+  es = new EventSource(`${base}/v1/jobs/${jobId}/stream`);
+
+  es.onopen = () => setState("live", "live");
+  es.onmessage = (m) => {
+    setState("live", "live");
+    let e;
+    try { e = JSON.parse(m.data); } catch { return; }
+    render(e);
+    if (e.stage === "done" || e.stage === "failed") finish(e, base);
+  };
+  es.onerror = () => {
+    // Almost always a reconnect in flight. EventSource retries on its own and
+    // resumes from Last-Event-ID, so the honest thing to show is "reconnecting",
+    // not an error — and definitely not es.close().
+    if (es && es.readyState === EventSource.CLOSED) setState("disconnected", "dead");
+    else setState("reconnecting…", "retry");
+  };
+}
+
+function stop(label) {
+  if (es) { es.close(); es = null; }
+  clearInterval(ticker);
+  $("stop").disabled = true;
+  if (label) setState(label, "");
+}
+
+function render(e) {
+  // A gap in `seq` means a frame was dropped for a stalled reader. Say so and
+  // repair it from the polling endpoint rather than pretending it never was.
+  if (lastSeq && e.seq > lastSeq + 1) {
+    const li = document.createElement("li");
+    li.className = "gap";
+    li.textContent = `… ${e.seq - lastSeq - 1} event(s) missed — GET /v1/jobs/${jobId}/events?after=${lastSeq} to fill the gap`;
+    trace.appendChild(li);
+  }
+  lastSeq = Math.max(lastSeq, e.seq);
+
+  const li = document.createElement("li");
+  li.className = e.level === "warn" ? "warn" : e.level === "error" ? "error" : "";
+  li.innerHTML =
+    `<span class="t">${clock(e)}</span>` +
+    `<span class="stage">${escape(STAGE_LABEL[e.stage] || e.stage)}</span>` +
+    `<span class="msg">${escape(e.message)}${detail(e.data)}</span>`;
+  trace.appendChild(li);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+// The interesting bits of `data`, inline. Kept small on purpose — the message
+// is the sentence, data is the structure a richer UI would bind to instead.
+function detail(d) {
+  if (!d) return "";
+  const keep = ["beat_index", "mismatches", "sources", "verified", "got", "total",
+                "duration_s", "target_s", "beats", "turn", "tool"];
+  const bits = keep.filter((k) => d[k] !== undefined && d[k] !== null)
+                   .map((k) => `${k}=${d[k]}`);
+  if (d.source === "database") bits.push("via job row");
+  return bits.length ? `  <span class="meta">${escape(bits.join(" · "))}</span>` : "";
+}
+
+function finish(e, base) {
+  stop(e.stage === "done" ? "finished" : "failed");
+  setState(e.stage === "done" ? "finished" : "failed", e.stage === "done" ? "" : "dead");
+  const box = document.createElement("div");
+  box.className = "result " + (e.stage === "done" ? "ok" : "bad");
+  if (e.stage === "done") {
+    const id = e.data?.video_id;
+    box.innerHTML =
+      `<h2>Done in ${elapsed()}</h2>` +
+      `<div>${escape(e.data?.hook || e.message)}</div>` +
+      (id ? `<p><a href="${base}/v1/videos/${id}" target="_blank">GET /v1/videos/${id}</a></p>` : "") +
+      (e.data?.mp4_path ? `<video controls src="${base}/media/${e.data.mp4_path}"></video>` : "");
+  } else {
+    box.innerHTML = `<h2>Failed after ${elapsed()}</h2><div>${escape(e.data?.error || e.message)}</div>`;
+  }
+  $("result").appendChild(box);
+}
+
+function setState(text, cls) {
+  $("state").textContent = text;
+  $("dot").className = "dot " + (cls || "");
+  $("src").textContent = jobId ? jobId.slice(0, 8) : "";
+}
+
+const tick = () => { $("clock").textContent = elapsed(); };
+const elapsed = () => {
+  const s = Math.floor((Date.now() - started) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+const clock = (e) => {
+  const t = Date.parse(e.ts);
+  return Number.isNaN(t) ? "" : elapsedFrom(t);
+};
+const elapsedFrom = (t) => {
+  const s = Math.max(0, Math.floor((t - started) / 1000));
+  return `+${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+const escape = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+</script>
+</body>
+</html>

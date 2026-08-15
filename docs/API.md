@@ -60,6 +60,8 @@ GET  /v1/lanes                              creative angles a UI can offer
 GET  /v1/companies          POST /v1/companies
 POST /v1/videos                             → 202 {job_id}
 GET  /v1/jobs/{job_id}                      status, progress, video_id when done
+GET  /v1/jobs/{job_id}/stream               SSE · the live trace, as it happens
+GET  /v1/jobs/{job_id}/events               the same trace as JSON, for pollers
 GET  /v1/videos/{id}                        metadata + mp4 url
 GET  /v1/videos/{id}/recipe                 prompts, corpus, settings
 POST /v1/videos/{id}/regenerate             {notes[]} → new job from stored recipe

@@ -23,7 +23,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from vira.agentic import cohesion
 from vira.config import settings
@@ -36,9 +36,27 @@ from vira.voice import synthesize
 
 log = logging.getLogger(__name__)
 
-MAX_TURNS = 18
+MAX_TURNS = 10
 MAX_IMAGE_CALLS = 24        # a metered image API needs a ceiling, not a hope
-WALL_CLOCK_BUDGET_S = 600
+WALL_CLOCK_BUDGET_S = 300
+
+# What a tool is about to do, in words a viewer can read. Announced before the
+# call rather than after it, because "regenerating frame 3…" is only useful
+# while the eight seconds it takes are still passing.
+TOOL_SENTENCES = {
+    "write_script": "writing the script",
+    "revise_script": "revising the script",
+    "assign_motion": "assigning caption treatments",
+    "make_imagery": "generating a frame for every beat",
+    "regenerate_frame": "regenerating frame {beat_index}",
+    "perform_voice": "recording narration",
+    "check_cohesion": "looking at what the frames actually show",
+    "critique_film": "a hostile first viewer is watching it",
+}
+
+
+def _silent(stage: str, message: str, level: str, data: dict[str, Any]) -> None:
+    """Default event sink. The CLI has a terminal; nobody else is listening."""
 
 
 @dataclass
@@ -63,9 +81,27 @@ class Production:
     style_contract: str = ""
     log: list[str] = field(default_factory=list)
 
-    def note(self, msg: str) -> None:
+    # Where the running trace goes when someone is watching. Optional with a
+    # no-op default so a Production built by the CLI behaves exactly as before;
+    # the API passes `vira.api.events.crew_sink(job_id)`, which is guaranteed
+    # not to raise, so a viewer can never break a 350-second generation.
+    on_event: Callable[[str, str, str, dict[str, Any]], None] = field(
+        default=_silent, repr=False
+    )
+
+    def emit(self, stage: str, msg: str, level: str = "info", **data: Any) -> None:
+        """Tell a watcher something without recording it.
+
+        Tool announcements go through here rather than `note`: they are UI
+        chatter, and `log` is provenance — it lands in the recipe as `crew_log`
+        and should stay the list of things that actually happened.
+        """
+        self.on_event(stage, msg, level, data)
+
+    def note(self, msg: str, stage: str = "crew", level: str = "info", **data: Any) -> None:
         self.log.append(msg)
         log.info("  %s", msg)
+        self.emit(stage, msg, level, **data)
 
 
 # --------------------------------------------------------------------------
@@ -87,7 +123,8 @@ async def t_write_script(p: Production, args: dict) -> str:
         "mission": f"{p.company.mission}\n\nCREATIVE DIRECTION: {p.lane.brief}",
     })
     p.remix = await build_remix(steered, p.product, p.trends, p.corpus, p.plan)
-    p.note(f"script written: {len(p.remix.beats)} beats")
+    p.note(f"script written: {len(p.remix.beats)} beats", "write",
+           beats=len(p.remix.beats))
     return json.dumps({
         "hook": p.remix.hook,
         "beats": [{"i": i, "say": b.say, "shot": b.shot, "motion": b.motion}
@@ -106,7 +143,7 @@ async def t_revise_script(p: Production, args: dict) -> str:
                  verdict=args.get("reason", ""),
                  weakest_beat=int(args.get("weakest_beat", 0) or 0))
     p.remix = await revise(p.remix, c, p.trends)
-    p.note(f"script revised on {len(c.notes)} note(s)")
+    p.note(f"script revised on {len(c.notes)} note(s)", "write", notes=c.notes)
     return json.dumps({"hook": p.remix.hook,
                        "beats": [b.say for b in p.remix.beats]})
 
@@ -137,7 +174,7 @@ async def t_assign_motion(p: Production, args: dict) -> str:
             p.remix.beats[i].camera = cam
         prev = m
         applied.append(f"{i}:{m}")
-    p.note(f"motion assigned: {', '.join(applied)}")
+    p.note(f"motion assigned: {', '.join(applied)}", "motion", applied=applied)
     return f"applied {len(applied)} assignments: {', '.join(applied)}"
 
 
@@ -154,7 +191,8 @@ async def t_make_imagery(p: Production, args: dict) -> str:
     got = sum(1 for s in p.shots if s.get("file"))
     # Pin the contract so later single-frame fixes stay in the same shoot.
     p.style_contract = next((s.get("style_contract", "") for s in p.shots if s.get("style_contract")), "")
-    p.note(f"imagery: {got}/{len(p.shots)} frames")
+    p.note(f"imagery: {got}/{len(p.shots)} frames", "imagery",
+           got=got, total=len(p.shots))
     return f"{got}/{len(p.shots)} frames generated"
 
 
@@ -184,7 +222,7 @@ async def t_regenerate_frame(p: Production, args: dict) -> str:
                       "style_contract": p.style_contract}
         if i < len(p.descriptions):
             p.descriptions[i] = await cohesion.describe_image(dst)
-        p.note(f"frame {i} regenerated: {note[:60]}")
+        p.note(f"frame {i} regenerated: {note[:60]}", "imagery", beat_index=i)
         return f"beat {i} regenerated. now shows: {p.descriptions[i][:160] if i < len(p.descriptions) else 'n/a'}"
     return f"regeneration of beat {i} failed"
 
@@ -194,7 +232,8 @@ async def t_perform_voice(p: Production, args: dict) -> str:
         return "no script yet"
     p.mp3, p.duration = await synthesize(p.remix, p.out_dir, p.lane)
     target = p.plan.target_seconds if p.plan else 28
-    p.note(f"voice: {p.duration:.1f}s (target {target}s)")
+    p.note(f"voice: {p.duration:.1f}s (target {target}s)", "voice",
+           duration_s=round(p.duration, 1), target_s=target)
     return json.dumps({
         "duration_s": round(p.duration, 1), "target_s": target,
         "over_by_s": round(p.duration - target, 1),
@@ -210,7 +249,8 @@ async def t_check_cohesion(p: Production, args: dict) -> str:
     target = p.plan.target_seconds if p.plan else 28
     result = await cohesion.check(p.remix, p.shots, p.descriptions, target, p.duration)
     n = len(result.get("mismatches", []))
-    p.note(f"cohesion: {result.get('verdict','')[:80]} ({n} mismatch(es))")
+    p.note(f"cohesion: {result.get('verdict','')[:80]} ({n} mismatch(es))", "cohesion",
+           level="warn" if n else "info", mismatches=n)
     return json.dumps(result)
 
 
@@ -218,7 +258,7 @@ async def t_critique(p: Production, args: dict) -> str:
     if not p.remix or not p.plan:
         return "no script yet"
     c = await critique(p.remix, p.plan)
-    p.note(f"critic: {c.verdict[:80]}")
+    p.note(f"critic: {c.verdict[:80]}", "critique")
     return json.dumps(c.model_dump())
 
 
@@ -331,9 +371,19 @@ async def direct(p: Production) -> str:
     started = time.monotonic()
 
     for turn in range(MAX_TURNS):
-        if time.monotonic() - started > WALL_CLOCK_BUDGET_S:
-            p.note("wall-clock budget reached")
+        elapsed = time.monotonic() - started
+        if elapsed > WALL_CLOCK_BUDGET_S:
+            p.note(f"wall-clock budget reached at turn {turn + 1}", "director",
+                   level="warn", turn=turn + 1)
             break
+
+        # A Director that cannot see its budget will polish until it is stopped.
+        # Telling it what is left turns "keep improving" into "ship it".
+        left = MAX_TURNS - turn
+        if left <= 3 or elapsed > WALL_CLOCK_BUDGET_S * 0.6:
+            messages.append({"role": "user", "content":
+                f"BUDGET: {left} turns and {int(WALL_CLOCK_BUDGET_S - elapsed)}s left. "
+                "Stop polishing. Ensure imagery and voice have run, then reply DONE."})
 
         resp = await client.chat.completions.create(
             model=s.agent_model, messages=messages, tools=tools,
@@ -351,10 +401,14 @@ async def direct(p: Production) -> str:
 
         if not msg.tool_calls:
             text = (msg.content or "").strip()
-            p.note(f"director: {text[:120]}")
+            p.note(f"director: {text[:120]}", "director")
             return text
 
-        for call in msg.tool_calls:
+        # The model routinely emits several tool calls in one turn — three frame
+        # regenerations, or imagery and voice together. Running them in sequence
+        # threw away the single biggest speedup available: they are independent
+        # network calls.
+        async def run_call(call) -> tuple[str, str]:
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments or "{}")
@@ -362,11 +416,26 @@ async def direct(p: Production) -> str:
                 args = {}
             fn = TOOLS.get(name)
             log.info("turn %d → %s(%s)", turn + 1, name, str(args)[:110])
+            # Announced before the await, not after: a viewer needs to know the
+            # eight seconds now passing are a frame being regenerated.
+            template = TOOL_SENTENCES.get(name, f"running {name}")
             try:
-                out = await fn(p, args) if fn else f"unknown tool {name}"
+                sentence = template.format(**args)
+            except (KeyError, IndexError, ValueError):
+                sentence = template
+            p.emit("tool", sentence, "info", tool=name, turn=turn + 1, args=args)
+            try:
+                return call.id, str(await fn(p, args)) if fn else (call.id, f"unknown tool {name}")
             except Exception as exc:  # noqa: BLE001 - a tool failure is information
-                out = f"ERROR: {exc}"
-                p.note(f"{name} failed: {exc}")
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": str(out)[:6000]})
+                p.note(f"{name} failed: {exc}", "crew", level="error", tool=name)
+                return call.id, f"ERROR: {exc}"
+
+        results = await asyncio.gather(
+            *(run_call(c) for c in msg.tool_calls), return_exceptions=True
+        )
+        for call, res in zip(msg.tool_calls, results):
+            content = res[1] if isinstance(res, tuple) else f"ERROR: {res}"
+            messages.append({"role": "tool", "tool_call_id": call.id,
+                             "content": str(content)[:6000]})
 
     return "MAX_TURNS reached"

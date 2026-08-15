@@ -35,7 +35,7 @@ from typing import Any
 
 from vira.agentic.crew import Production, direct
 from vira.analyze import analyze_corpus
-from vira.api import store
+from vira.api import events, store
 from vira.config import settings
 from vira.director import critique, plan as make_plan, revise
 from vira.lanes import Lane, get as get_lane
@@ -84,6 +84,12 @@ def media_url(base_url: str, media_path: str) -> str:
 
 def spawn(job_id: str, **kwargs: Any) -> None:
     """Start a generation in the background and return immediately."""
+    # Published before the task is created, so the moment POST /v1/videos
+    # answers, this process is already the one that owns the job's event stream
+    # — a client that connects immediately finds a live feed, not an empty one.
+    events.publish(job_id, "queued", "job accepted", data={
+        k: v for k, v in kwargs.items() if k in ("company_slug", "product", "lane_name", "mode")
+    })
     task = asyncio.create_task(run_job(job_id, **kwargs))
     _running.add(task)
     task.add_done_callback(_running.discard)
@@ -165,8 +171,15 @@ def _relocate_shots(shots: list[dict], src: Path, dest: Path) -> list[dict]:
     return shots
 
 
-async def _note(job_id: str, note: str) -> None:
+async def _note(job_id: str, note: str, stage: str = "crew", **data: Any) -> None:
+    """One stage transition: the job row for pollers, the bus for watchers.
+
+    Both, not one: the row survives a restart and every worker can read it, and
+    the bus carries the resolution a UI needs. `stage` defaults so the signature
+    stays backwards compatible with a call that has nothing better to say.
+    """
     log.info("[%s] %s", job_id, note)
+    events.publish(job_id, stage, note, data=data)
     await store.update_job_status(job_id, "running", progress_note=note)
 
 
@@ -181,21 +194,22 @@ async def _fast(
         "mission": f"{company.mission}\n\nCREATIVE DIRECTION FOR THIS AD: {lane.brief}",
     })
 
-    await _note(job_id, f"planning the {lane.name} cut")
+    await _note(job_id, f"planning the {lane.name} cut", "plan", lane=lane.name)
     vp = await make_plan(company, product, lane.brief, corpus)
     rec.note("plan", vp.model_dump())
 
-    await _note(job_id, f"writing {vp.beat_count} beats over {vp.target_seconds}s")
+    await _note(job_id, f"writing {vp.beat_count} beats over {vp.target_seconds}s",
+                "write", beats=vp.beat_count, target_s=vp.target_seconds)
     remix = await build_remix(steered, product, picked, corpus, vp)
 
-    await _note(job_id, "hostile first viewer reading it back")
+    await _note(job_id, "hostile first viewer reading it back", "critique")
     crit = await critique(remix, vp)
     rec.note("critique", crit.model_dump())
     if crit.notes:
         remix = await revise(remix, crit, picked)
 
     # Voice and imagery both need the script and neither needs the other.
-    await _note(job_id, "recording narration and generating frames")
+    await _note(job_id, "recording narration and generating frames", "voice")
     (mp3, duration), shots = await asyncio.gather(
         synthesize(remix, out_dir, lane),
         fetch_or_generate(company, product, remix, shots_dir, lane.look),
@@ -209,13 +223,17 @@ async def _agentic(
     out_dir: Path, shots_dir: Path,
 ) -> tuple[Remix, list[dict], Path, float]:
     """Director plans, delegates, inspects what came back, and fixes it. ~350s."""
-    await _note(job_id, "director is planning the film")
+    await _note(job_id, "director is planning the film", "plan")
     crew_public = VIDEO_DIR / "public" / "jobs" / job_id
     (crew_public / "shots").mkdir(parents=True, exist_ok=True)
 
     prod = Production(
         company=company, product=product, lane=lane, corpus=corpus,
         trends=picked, out_dir=out_dir, public_dir=crew_public,
+        # The crew's running commentary is the most interesting thing this
+        # service produces while a caller waits, and until now it only reached
+        # the log. `crew_sink` cannot raise, so the Director loop is unaffected.
+        on_event=events.crew_sink(job_id),
     )
     closing = await direct(prod)
     rec.note("director_closing", closing)
@@ -240,7 +258,7 @@ async def _produce(
 ) -> dict:
     t0 = time.monotonic()
 
-    await _note(job_id, "selecting candidate trends")
+    await _note(job_id, "selecting candidate trends", "select")
     supa = Supa()
     row = await get_company(supa, company_slug)
     if not row:
@@ -248,12 +266,14 @@ async def _produce(
     company = Company.from_row(row)
 
     picked, rejected = await shortlist(supa, company, product)
-    await _note(job_id, f"verifying {len(picked)} source URLs")
+    await _note(job_id, f"verifying {len(picked)} source URLs", "verify",
+                    sources=len(picked))
     picked, dead = await verify_all(picked)
     if not picked:
         raise JobFailed("nothing survived selection — no verified sources to build on")
 
-    await _note(job_id, f"analysing {len(picked)} verified sources")
+    await _note(job_id, f"analysing {len(picked)} verified sources", "analyze",
+                    verified=len(picked), dead=len(dead))
     corpus = await analyze_corpus(company, product, picked)
 
     out_dir = _new_out_dir(company_slug, lane.name, mode)
@@ -282,7 +302,7 @@ async def _produce(
         )
 
         # Deterministic, after the creative work, out of any agent's reach.
-        await _note(job_id, "scoring against the cited sources")
+        await _note(job_id, "scoring against the cited sources", "score")
         score = await score_remix(company, product, remix, picked)
         dispo, reason = disposition(score)
 
@@ -321,7 +341,7 @@ async def _produce(
     write_props(props, out_dir)
 
     mp4 = out_dir / f"{company_slug}-{lane.name}.mp4"
-    await _note(job_id, "rendering")
+    await _note(job_id, "rendering", "render")
     async with _render_slots:
         await asyncio.to_thread(
             render, out_dir / "props.json", mp4, concurrency=RENDER_CONCURRENCY
@@ -352,10 +372,7 @@ async def run_job(
         try:
             lane = steer(get_lane(lane_name), notes)
         except KeyError:
-            await store.update_job_status(
-                job_id, "failed", progress_note="failed",
-                error=f"unknown lane {lane_name!r}",
-            )
+            await _fail(job_id, f"unknown lane {lane_name!r}")
             return
         try:
             video = await _produce(
@@ -363,17 +380,28 @@ async def run_job(
             )
             # The job row carries no video id; get_job joins the videos it
             # produced. Nothing to write back here beyond the terminal state.
+            hook = str(video.get("hook") or "")
             await store.update_job_status(
-                job_id, "done", progress_note=f"done · {video.get('hook', '')[:80]}"
+                job_id, "done", progress_note=f"done · {hook[:80]}"
             )
+            # The terminal event closes every open stream, and carries the id a
+            # watcher needs to fetch the video without a second round trip.
+            events.publish(job_id, "done", f"done · {hook[:80]}", data={
+                "video_id": str(video.get("id") or ""),
+                "hook": hook,
+                "mp4_path": video.get("mp4_path"),
+                "score": video.get("score"),
+                "disposition": video.get("disposition"),
+            })
         except JobFailed as exc:
             log.warning("[%s] %s", job_id, exc)
-            await store.update_job_status(
-                job_id, "failed", progress_note="failed", error=str(exc)
-            )
+            await _fail(job_id, str(exc))
         except Exception as exc:  # noqa: BLE001 - a dead job must still be reportable
             log.exception("[%s] generation crashed", job_id)
-            await store.update_job_status(
-                job_id, "failed", progress_note="failed",
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            await _fail(job_id, f"{type(exc).__name__}: {exc}")
+
+
+async def _fail(job_id: str, error: str) -> None:
+    """Terminal failure, on the row and on the stream. Never leave a stream open."""
+    await store.update_job_status(job_id, "failed", progress_note="failed", error=error)
+    events.publish(job_id, "failed", error, level="error", data={"error": error})

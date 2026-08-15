@@ -163,7 +163,13 @@ async def generate_shots(
     if not s.gemini_api_key:
         raise ImageGenError("GEMINI_API_KEY is not set")
 
-    if style:
+    if style and len(remix.beats) == 1:
+        # Single-frame regeneration. The beat and the correction note already
+        # describe the photograph; asking a model to restate that costs ~25s and
+        # adds nothing. Nine regenerations spent four minutes here.
+        b = remix.beats[0]
+        prompts = [f"{b.show or b.say}. {b.shot}".strip()]
+    elif style:
         _, prompts = await derive_prompts(company, product, remix, look)
     else:
         style, prompts = await derive_prompts(company, product, remix, look)

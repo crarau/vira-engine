@@ -43,7 +43,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from vira.api.db import init_db
-from vira.api.routes import companies, jobs, reviews, videos
+from vira.api.routes import corpus, companies, jobs, reviews, videos
 from vira.api.worker import OUT_DIR
 
 log = logging.getLogger("vira.api")
@@ -88,6 +88,7 @@ app.add_middleware(
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=OUT_DIR), name="media")
 
+app.include_router(corpus.router)
 app.include_router(companies.router)
 app.include_router(videos.router)
 app.include_router(jobs.router)
