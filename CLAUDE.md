@@ -91,6 +91,43 @@ stage that calls a model, route it through `vira.llm` so it is captured.
 - **PostgREST caps responses at 1000 rows** regardless of `limit`. Use
   `Supa.select_all`, which pages.
 
+## The API is live — publish every stable change
+
+`https://vira.ideaplaces.com` is a public URL that other people (and Lovable)
+call. The box behind it must not drift from what is stable locally.
+
+**Whenever the REST API changes and the change is stable, publish it:**
+
+```bash
+deploy/publish.sh                 # ship what is already committed
+deploy/publish.sh -m "message"    # commit everything first, then ship
+```
+
+Never `git push` an API change and consider it done — pushing updates GitHub,
+not the machine. Nothing serves the new code until `publish.sh` restarts
+uvicorn on `chipdev`.
+
+The script is deliberately conservative and already handles the dangerous
+parts: it refuses a dirty tree without a commit message, runs the tests and
+aborts if they fail, applies the idempotent schema, health-checks on the box,
+**rolls back to the previous commit if the new one will not start**, then
+verifies through the tunnel.
+
+Check whether the machine is current before assuming it is:
+
+```bash
+git rev-parse --short HEAD
+ssh chipdev 'cd $HOME/vira-engine && git rev-parse --short HEAD'
+curl -s -o /dev/null -w '%{http_code}\n' https://vira.ideaplaces.com/healthz
+```
+
+Stable means: tests pass, and the endpoint has been exercised at least once
+locally. A half-finished endpoint stays on the laptop — the public URL is not a
+staging environment.
+
+`deploy/publish.sh` does **not** touch the tunnel or DNS. Those are Terraform in
+`ideaplaces-devops`, and a dashboard edit gets reverted by the next apply.
+
 ## Layout
 
 ```

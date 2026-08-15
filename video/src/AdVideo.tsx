@@ -34,6 +34,10 @@ export type AdVideoProps = {
   hashtags: string[];
   audioSrc: string | null;
   audioFile?: string;
+  /** Burn the director's camera notes into the frame. Off by default — they
+   *  are instructions for whoever shoots the real thing, not something a
+   *  viewer should ever see. Turn on to produce a shooting guide. */
+  showShotNotes?: boolean;
   fps: number;
   beats: BeatProps[];
 };
@@ -263,7 +267,11 @@ const ANCHOR: Array<React.CSSProperties> = [
   { justifyContent: "flex-end", padding: "0 70px 280px" },
 ];
 
-const Caption: React.FC<{ beat: BeatProps; index: number }> = ({ beat, index }) => {
+const Caption: React.FC<{ beat: BeatProps; index: number; showShotNotes?: boolean }> = ({
+  beat,
+  index,
+  showShotNotes,
+}) => {
   // Inside a <Sequence>, useCurrentFrame() is ALREADY sequence-relative.
   // Subtracting startFrame again drives springs negative and pins opacity at 0.
   const local = useCurrentFrame();
@@ -279,16 +287,18 @@ const Caption: React.FC<{ beat: BeatProps; index: number }> = ({ beat, index }) 
     <AbsoluteFill style={{ alignItems: "center", ...ANCHOR[index % ANCHOR.length], opacity: out }}>
       <div style={{ fontFamily: FONT, textAlign: "center" }}>
         <Treatment beat={beat} absFrame={beat.startFrame + local} fps={fps} local={local} />
-        <div style={{ marginTop: 62, fontSize: 21, fontWeight: 600, color: ACCENT, opacity: 0.7, letterSpacing: 0.4 }}>
-          {beat.shot || beat.show}
-        </div>
+        {showShotNotes ? (
+          <div style={{ marginTop: 62, fontSize: 21, fontWeight: 600, color: ACCENT, opacity: 0.7, letterSpacing: 0.4 }}>
+            {beat.shot || beat.show}
+          </div>
+        ) : null}
       </div>
     </AbsoluteFill>
   );
 };
 
 export const AdVideo: React.FC<AdVideoProps> = ({
-  brand, hook, cta, hashtags, audioSrc, audioFile, beats,
+  brand, hook, cta, hashtags, audioSrc, audioFile, beats, showShotNotes = false,
 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames, fps } = useVideoConfig();
@@ -332,7 +342,7 @@ export const AdVideo: React.FC<AdVideoProps> = ({
 
       {beats.map((beat, i) => (
         <Sequence key={i} from={beat.startFrame} durationInFrames={Math.max(beat.endFrame - beat.startFrame, 1)}>
-          <Caption beat={beat} index={i} />
+          <Caption beat={beat} index={i} showShotNotes={showShotNotes} />
         </Sequence>
       ))}
 

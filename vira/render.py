@@ -78,6 +78,9 @@ def build_props(
         "audioSrc": str(audio_path.resolve()) if audio_path else None,
         # Namespaced so concurrent renders never read each other's assets.
         "audioFile": audio_path.name if audio_path else "narration.mp3",
+        # Camera notes stay off the finished ad. Set SHOW_SHOT_NOTES=true to
+        # render the shooting-guide variant instead.
+        "showShotNotes": s.show_shot_notes,
         "durationInFrames": max(int(duration_s * s.fps), s.fps),
         "fps": s.fps,
         "beats": beats,

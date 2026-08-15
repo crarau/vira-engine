@@ -358,10 +358,14 @@ function Corpus() {
                     page
                   </button>
                 )}
-                {limit < CORPUS_PAGE_MAX && filtered.length >= limit && (
+                {items.length >= limit && (
                   <div className="mt-2 text-center text-[11px] text-zinc-600">
-                    This is a {limit}-row page of {num(page?.total_in_corpus ?? 0)}.
-                    Raise the limit or narrow the category.
+                    This is a {limit}-row page; the corpus holds{" "}
+                    {num(page?.total_in_corpus ?? 0)} trends and the endpoint caps
+                    a page at {CORPUS_PAGE_MAX}.{" "}
+                    {limit < CORPUS_PAGE_MAX
+                      ? "Raise the limit or narrow the category."
+                      : "Narrow the category to see further in."}
                   </div>
                 )}
               </>

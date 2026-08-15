@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     voice_similarity: float = 0.6
     voice_style: float = 0.75
 
+    # Burn director camera notes into the frame — a shooting guide, not an ad.
+    show_shot_notes: bool = False
     fps: int = 30
     width: int = 1080
     height: int = 1920
