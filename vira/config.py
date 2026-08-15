@@ -36,7 +36,17 @@ class Settings(BaseSettings):
 
     # --- voice / render --------------------------------------------------
     elevenlabs_api_key: str | None = None
-    elevenlabs_voice_id: str | None = None
+    # Liam — "Energetic, Social Media Creator". A pitchman, not a narrator.
+    elevenlabs_voice_id: str | None = "TX3LPaxmHKxFdv7VOQHJ"
+    # v3 understands inline performance tags; v2 exposes stability/style knobs.
+    elevenlabs_model: str = "eleven_v3"
+    voice_tags: bool = True
+    # Low stability is deliberate: it widens emotional range. High stability
+    # produces the flat, mechanical read that makes an ad sound like a subtitle.
+    voice_stability: float = 0.25
+    voice_similarity: float = 0.6
+    voice_style: float = 0.75
+
     fps: int = 30
     width: int = 1080
     height: int = 1920
