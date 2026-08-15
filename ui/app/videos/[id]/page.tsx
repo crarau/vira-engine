@@ -366,6 +366,61 @@ function Beats({
   );
 }
 
+/**
+ * What the corpus lost on the way to this ad.
+ *
+ * `select.py` counts every rejection by reason, and `verify` counts the URLs
+ * that were dead by the time they were fetched. Together they explain a thin
+ * source list far better than the surviving rows do — a video grounded in three
+ * clips is usually a selection problem, not a writing one.
+ */
+function Rejections({ plan }: { plan: Record<string, unknown> }) {
+  const rejected = plan.rejected_at_selection;
+  const dead = plan.dead_urls;
+  const rows =
+    rejected && typeof rejected === "object" && !Array.isArray(rejected)
+      ? Object.entries(rejected as Record<string, number>)
+      : [];
+  if (rows.length === 0 && typeof dead !== "number") return null;
+  const total = rows.reduce((s, [, n]) => s + (Number(n) || 0), 0);
+
+  return (
+    <div className="mt-3 rounded border border-zinc-800 bg-zinc-950/60 p-2.5">
+      <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+        rejected before a prompt ever saw it
+      </div>
+      {rows.length > 0 && (
+        <div className="mt-1.5 space-y-1">
+          {rows
+            .sort((a, b) => Number(b[1]) - Number(a[1]))
+            .map(([reason, n]) => (
+              <div key={reason} className="flex items-center gap-2 text-[12px]">
+                <span className="w-10 shrink-0 text-right font-mono text-zinc-200">
+                  {String(n)}
+                </span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-900">
+                  <div
+                    className="h-full bg-zinc-600"
+                    style={{
+                      width: `${total ? (Number(n) / total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="w-56 shrink-0 text-zinc-400">{reason}</span>
+              </div>
+            ))}
+        </div>
+      )}
+      {typeof dead === "number" && (
+        <div className="mt-2 text-[12px] text-zinc-400">
+          <span className="font-mono text-zinc-200">{dead}</span> source URL
+          {dead === 1 ? " was" : "s were"} dead at verification time and dropped.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FrameCard({ f, index }: { f: RecipeAsset; index: number }) {
   const [ok, setOk] = useState(true);
   const path = f.path || "";

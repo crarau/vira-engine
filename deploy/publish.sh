@@ -16,7 +16,7 @@
 set -euo pipefail
 
 HOST=chipdev
-REMOTE=~/vira-engine
+REMOTE='$HOME/vira-engine'   # single-quoted: must expand on the box, not here
 PORT=8720
 PUBLIC=https://vira.ideaplaces.com
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
