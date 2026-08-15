@@ -54,6 +54,26 @@ async with Recorder(out_dir / name) as rec:
 When no recorder is active the capture is a no-op, so the CLI and the Render
 worker are unaffected.
 
+Each captured call also records the **stage** that made it — `analyze`, `plan`,
+`write`, `critique`, `voice`, `score`, or `director:turnN` on an agentic run — so
+a twelve-call recipe is navigable without matching system prompts against
+modules by eye. Only the API worker tracks a stage; a CLI recipe leaves it empty
+rather than guessing.
+
+An API job records the whole pipeline, selection onward: the corpus analysis is
+a model call whose prompt carries the entire corpus and whose answer tells the
+writer what the category rewards, so it belongs in the recipe next to the ad it
+shaped. `variants.py` cannot do this — it analyses once and shares the result
+across five recipes — but one API job is exactly one video.
+
+## Watching it happen
+
+The same prompts go out live while a job runs, as `debug` events on
+`GET /v1/jobs/{id}/stream?level=debug`. Same text, no truncation; the difference
+is only when you get to read it. The stream is a conversation and is dropped
+when the process restarts — the recipe is the record. See docs/API.md, "Verbose:
+watching the prompts".
+
 ## The tweak loop
 
 1. Watch the five videos, pick the one closest to right.

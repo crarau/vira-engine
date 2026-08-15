@@ -238,9 +238,35 @@ function Generate() {
                 })}
               </div>
             )}
+            <BioVerdict data={suggestions} />
           </Panel>
 
-          <Panel title="2 · Product">
+          <Panel
+            title="2 · Start from the corpus"
+            right={
+              suggestions && !suggestLoading ? (
+                <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-600">
+                  {suggestions.cached ? "cached" : `${suggestions.elapsed_ms}ms`}
+                </span>
+              ) : null
+            }
+          >
+            {!slug ? (
+              <Empty>Pick a company and the corpus will propose angles.</Empty>
+            ) : (
+              <SuggestionCards
+                data={suggestions}
+                loading={suggestLoading}
+                error={suggestErr}
+                activeProduct={product}
+                onPick={pickSuggestion}
+                onRefresh={regenerateSuggestions}
+                refreshing={regenerating}
+              />
+            )}
+          </Panel>
+
+          <Panel title="3 · Product">
             <input
               value={product}
               onChange={(e) => {
@@ -256,7 +282,7 @@ function Generate() {
             </p>
           </Panel>
 
-          <Panel title="3 · Lane">
+          <Panel title="4 · Lane">
             {!lanes ? (
               <Loading what="reading /v1/lanes" />
             ) : (
@@ -296,7 +322,7 @@ function Generate() {
             )}
           </Panel>
 
-          <Panel title="4 · Mode">
+          <Panel title="5 · Mode">
             <div className="grid gap-2 sm:grid-cols-2">
               {(["fast", "agentic"] as const).map((m) => (
                 <button
