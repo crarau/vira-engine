@@ -1,6 +1,6 @@
 "use client";
 
-import { GATE } from "@/lib/api";
+import { CorpusStats, GATE } from "@/lib/api";
 import { num } from "@/lib/format";
 
 const BUCKETS: { label: string; lo: number; hi: number }[] = [
@@ -108,6 +108,89 @@ export function AgeHistogram({
         Grey buckets are past the {maxAgeDays}-day freshness window. `select.py`
         applies that filter in the database, before any row cap, so those rows
         never reach a prompt.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Corpus-wide age bands, from `/v1/corpus/stats`.
+ *
+ * The trends endpoint caps a page at 200 rows over a corpus of thousands, so
+ * a histogram built from the loaded page describes the page, not the corpus.
+ * These four bands are the only honest whole-corpus view, and `usable_share_90d`
+ * is the number that decides whether grounding will work at all.
+ */
+export function CorpusAgeBands({
+  stats,
+  maxAgeDays = GATE.max_age_days,
+}: {
+  stats: CorpusStats;
+  maxAgeDays?: number;
+}) {
+  const total = stats.trends_total ?? 0;
+  const f30 = stats.fresh_30d ?? 0;
+  const f90 = stats.fresh_90d ?? 0;
+  const y1 = stats.within_1y ?? 0;
+  const bands = [
+    { label: "≤30d", n: f30, tone: "bg-emerald-500", usable: true },
+    { label: "30–90d", n: Math.max(0, f90 - f30), tone: "bg-emerald-700", usable: true },
+    { label: "90d–1y", n: Math.max(0, y1 - f90), tone: "bg-zinc-700", usable: false },
+    { label: "over 1y", n: Math.max(0, total - y1), tone: "bg-zinc-800", usable: false },
+  ];
+  const share =
+    typeof stats.usable_share_90d === "number"
+      ? stats.usable_share_90d
+      : total
+        ? f90 / total
+        : 0;
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[11px]">
+        <span className="text-zinc-400">
+          <b className="font-mono text-sm text-zinc-100">{num(total)}</b> trends
+          in the corpus
+        </span>
+        <span className="text-emerald-400">
+          <b className="font-mono text-sm">{num(f90)}</b> inside the {maxAgeDays}
+          -day window
+        </span>
+        <span className={share < 0.5 ? "text-amber-400" : "text-zinc-500"}>
+          usable share{" "}
+          <b className="font-mono text-sm">{(share * 100).toFixed(0)}%</b>
+        </span>
+        <span className="text-zinc-500">
+          <b className="font-mono text-sm text-zinc-400">
+            {num(Math.max(0, total - f90))}
+          </b>{" "}
+          can never reach a prompt
+        </span>
+      </div>
+
+      <div className="flex h-7 w-full overflow-hidden rounded border border-zinc-800">
+        {bands.map((b) => (
+          <div
+            key={b.label}
+            className={`${b.tone} flex items-center justify-center`}
+            style={{ width: `${total ? (b.n / total) * 100 : 0}%` }}
+            title={`${b.label}: ${b.n}`}
+          >
+            <span className="truncate px-1 font-mono text-[9px] text-black/70">
+              {total && b.n / total > 0.06 ? num(b.n) : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-4 text-[10px]">
+        {bands.map((b) => (
+          <span key={b.label} className="flex items-center gap-1">
+            <span className={`inline-block h-2 w-2 rounded-sm ${b.tone}`} />
+            <span className={b.usable ? "text-emerald-500" : "text-zinc-600"}>
+              {b.label} · {num(b.n)}
+            </span>
+          </span>
+        ))}
       </div>
     </div>
   );

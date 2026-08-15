@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { defaultProduct } from "@/lib/defaults";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Company,
@@ -43,6 +44,11 @@ function Generate() {
 
   const [slug, setSlug] = useState(params.get("company") || "");
   const [product, setProduct] = useState(params.get("product") || "");
+  // Only auto-fill while the field is still ours. The moment the user types,
+  // switching company must not wipe what they wrote.
+  const [productTouched, setProductTouched] = useState(
+    Boolean(params.get("product"))
+  );
   const [lane, setLane] = useState("founder-story");
   const [mode, setMode] = useState<"fast" | "agentic">("fast");
   const [submitting, setSubmitting] = useState(false);
@@ -146,7 +152,10 @@ function Generate() {
                   return (
                     <button
                       key={c.slug}
-                      onClick={() => setSlug(c.slug)}
+                      onClick={() => {
+                        setSlug(c.slug);
+                        if (!productTouched) setProduct(defaultProduct(c));
+                      }}
                       className={`rounded border px-2.5 py-2 text-left transition-colors ${
                         on
                           ? "border-sky-600 bg-sky-950/40"
@@ -181,7 +190,10 @@ function Generate() {
           <Panel title="2 · Product">
             <input
               value={product}
-              onChange={(e) => setProduct(e.target.value)}
+              onChange={(e) => {
+                setProduct(e.target.value);
+                setProductTouched(e.target.value.trim().length > 0);
+              }}
               placeholder="e.g. a slow-release treat dispenser for anxious dogs"
               className="w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
             />
@@ -287,11 +299,11 @@ function Generate() {
             >
               {submitting ? "posting…" : "Generate video"}
             </button>
-            {submitErr && (
+            {submitErr ? (
               <div className="mt-2">
                 <ErrorBox error={submitErr} />
               </div>
-            )}
+            ) : null}
             <p className="mt-2 text-[11px] text-zinc-600">
               The evidence gate runs server-side after generation, always. No
               parameter here can skip it or move its threshold.

@@ -148,7 +148,7 @@ sequenceDiagram
     participant X as Claude · Gemini · ElevenLabs
 
     E->>P: Production with corpus already shortlisted and verified
-    Note over E,P: RESEARCH is not a tool. select + verify + analyze run<br/>before the loop; the Director cannot redo or widen them.
+    Note over E,P: RESEARCH is not a tool. select + verify + analyze run<br/>before the loop, and the Director cannot redo or widen them.
     E->>D: system DIRECTOR_INSTRUCTIONS + brief with lane, look, voice, whitespace
 
     loop turn 1..MAX_TURNS = 10, aborted at WALL_CLOCK_BUDGET_S = 300
@@ -159,11 +159,11 @@ sequenceDiagram
         Note over R: the fan-out. Every call in the turn is dispatched at once —<br/>running them in sequence was the single biggest slowdown.
         par concurrent tool calls from one turn
             R->>X: write_script or revise_script → Claude
-        and
+        and same turn
             R->>X: make_imagery → Gemini, N frames themselves in parallel
-        and
+        and same turn
             R->>X: perform_voice → ElevenLabs
-        and
+        and same turn
             R->>X: regenerate_frame beat i → Gemini, exactly one frame
         end
         R->>P: mutate remix · shots · mp3 · duration · descriptions · image_calls

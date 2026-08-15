@@ -98,10 +98,12 @@ export const getCompanies = () => api<Company[]>("/v1/companies");
 // --------------------------------------------------------------- corpus
 
 /**
- * ASSUMED SHAPE. `/v1/corpus/companies` — the LOVABLE-side company rows, which
- * carry the category join and the enrichment (`company_insights`) that the
- * local mirror does not. Read defensively: `insights` may arrive as an object,
- * as an array of rows (PostgREST embeds are arrays), or not at all.
+ * `/v1/corpus/companies` — the Lovable-side company rows.
+ *
+ * Enrichment is flattened onto the row rather than nested: `enriched` is the
+ * boolean the UI reads, and `positioning` / `keywords` / `ad_themes` are what
+ * the enrichment produced. The optional nested forms are still accepted because
+ * a PostgREST embed would arrive that way.
  */
 export interface CorpusInsights {
   summary?: string | null;
@@ -111,7 +113,7 @@ export interface CorpusInsights {
   ad_themes?: string[] | null;
 }
 
-export interface CorpusCompany {
+export interface CorpusCompany extends CorpusInsights {
   id?: string;
   slug: string;
   name: string;
@@ -129,14 +131,14 @@ export interface CorpusCompany {
   trend_count?: number | null;
 }
 
-/** ASSUMED SHAPE. `/v1/corpus/trends` — the scraped corpus, one row per clip. */
+/** `/v1/corpus/trends` — the scraped corpus, one row per clip. */
 export interface CorpusTrend {
   trend_key: string;
-  platform?: string;
-  title?: string;
+  author?: string;
   caption?: string;
   source_url?: string;
-  author?: string;
+  /** Cover frame. The API flattens it out of the scraper's raw payload. */
+  thumbnail?: string | null;
   format?: string;
   hashtags?: string[] | null;
   views?: number;
@@ -145,50 +147,84 @@ export interface CorpusTrend {
   trend_score?: number;
   posted_at?: string | null;
   age_days?: number | null;
+  /** Server's own verdict against the freshness window. */
+  stale?: boolean;
+  /** The category slug this row was matched under. */
+  query?: string;
+  // Tolerated but not currently sent.
+  title?: string;
+  platform?: string;
   relevance_rank?: number;
   category?: string;
   category_slug?: string;
   raw?: Record<string, unknown> | null;
 }
 
-/** ASSUMED SHAPE, and entirely optional — the page derives its own if absent. */
+export interface TrendsPage {
+  total_in_corpus: number;
+  returned: number;
+  order: string;
+  note: string | null;
+  items: CorpusTrend[];
+}
+
+/** `/v1/corpus/stats` — corpus-wide counts the 200-row page cannot show. */
 export interface CorpusStats {
   trends_total?: number;
-  companies_total?: number;
-  categories_total?: number;
-  fresh_count?: number;
-  stale_count?: number;
-  median_age_days?: number;
-  max_age_days?: number;
-  newest_posted_at?: string | null;
-  oldest_posted_at?: string | null;
+  fresh_30d?: number;
+  fresh_90d?: number;
+  within_1y?: number;
+  usable_share_90d?: number;
+  companies?: number;
+  by_category?: { name: string; slug: string; mapped: number }[];
 }
 
 export interface CorpusCategory {
-  slug?: string;
+  id?: string;
   name?: string;
+  slug?: string;
   trend_count?: number;
-  company_count?: number;
 }
 
-export async function getCorpusCompanies(): Promise<CorpusCompany[]> {
+/** Both corpus list endpoints cap `limit` at 200. Asking for more is a 422. */
+export const CORPUS_PAGE_MAX = 200;
+
+export async function getCorpusCompanies(limit = CORPUS_PAGE_MAX): Promise<CorpusCompany[]> {
   return unwrap<CorpusCompany>(
-    await api<unknown>("/v1/corpus/companies?limit=500"),
+    await api<unknown>(`/v1/corpus/companies?limit=${Math.min(limit, CORPUS_PAGE_MAX)}`),
     "companies",
   );
 }
 
+export type TrendOrder = "trend_score" | "views" | "posted_at";
+
+/**
+ * One page of trends. Ordering and the freshness filter run server-side —
+ * with a 200-row cap over a 4,600-row corpus, sorting the page in the browser
+ * would sort the wrong 200 rows.
+ */
 export async function getCorpusTrends(params: {
   category?: string;
+  order?: TrendOrder;
+  maxAgeDays?: number | null;
   limit?: number;
-} = {}): Promise<CorpusTrend[]> {
+} = {}): Promise<TrendsPage> {
   const q = new URLSearchParams();
   if (params.category) q.set("category", params.category);
-  q.set("limit", String(params.limit ?? 1000));
-  return unwrap<CorpusTrend>(
-    await api<unknown>(`/v1/corpus/trends?${q}`),
-    "trends",
-  );
+  if (params.order) q.set("order", params.order);
+  if (typeof params.maxAgeDays === "number")
+    q.set("max_age_days", String(params.maxAgeDays));
+  q.set("limit", String(Math.min(params.limit ?? CORPUS_PAGE_MAX, CORPUS_PAGE_MAX)));
+  const payload = await api<unknown>(`/v1/corpus/trends?${q}`);
+  const items = unwrap<CorpusTrend>(payload, "trends");
+  const meta = (payload && typeof payload === "object" ? payload : {}) as Partial<TrendsPage>;
+  return {
+    total_in_corpus: meta.total_in_corpus ?? items.length,
+    returned: meta.returned ?? items.length,
+    order: meta.order ?? params.order ?? "trend_score",
+    note: meta.note ?? null,
+    items,
+  };
 }
 
 export async function getCorpusCategories(): Promise<CorpusCategory[]> {

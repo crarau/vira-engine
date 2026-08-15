@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -200,7 +201,14 @@ def _from_job_row(job_id: str, row: dict[str, Any]) -> events.Event:
     videos = row.get("videos") or []
     data: dict[str, Any] = {"source": "database", "status": status}
     if stage == "done" and videos:
-        data["video_id"] = str(videos[0]["id"])
+        # Same keys the live terminal event carries, so a client needs one
+        # branch for both modes rather than one per source.
+        first = videos[0]
+        data["video_id"] = str(first["id"])
+        data["hook"] = first.get("hook") or ""
+        data["mp4_path"] = first.get("mp4_path")
+        data["score"] = first.get("score")
+        data["disposition"] = first.get("disposition")
     if row.get("error"):
         data["error"] = row["error"]
     # On a failure the row's note is the word "failed" and the reason is in
@@ -272,18 +280,19 @@ async def _polled(
     yield ": this worker is not running this job — falling back to the job row\n\n"
     seen: str | None = None
     last_beat = time.monotonic()
+    # The job row has no sequence of its own — it is one mutable cell — so this
+    # connection numbers what it observes. Ids stay monotonic and unique, which
+    # is what a client deduplicating on `seq` requires; without it every
+    # progress note would arrive as id 1 and all but the first would be dropped.
+    seq = resume or 0
     while time.monotonic() < deadline:
         event = _from_job_row(job_id, row)
         fingerprint = f"{event.stage}|{event.message}"
-        # A terminal event is sent whatever the resume point says. The synthetic
-        # sequence here counts differently from the bus's, so a Last-Event-ID
-        # picked up from a live feed can be far past it — and suppressing the
-        # one event that closes the stream would hang the client until the cap.
-        fresh_enough = event.terminal or resume is None or event.seq > resume
-        if fingerprint != seen and fresh_enough:
+        if fingerprint != seen:
             seen = fingerprint
             last_beat = time.monotonic()
-            yield event.sse()
+            seq += 1
+            yield replace(event, seq=seq).sse()
             if event.terminal:
                 return
         elif time.monotonic() - last_beat >= HEARTBEAT_S:

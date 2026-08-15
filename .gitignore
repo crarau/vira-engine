@@ -10,3 +10,6 @@ out/
 video/public/shots/
 video/public/*.mp3
 deploy/*.env
+
+ui/node_modules/
+ui/.next/

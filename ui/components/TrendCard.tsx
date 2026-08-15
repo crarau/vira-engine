@@ -5,8 +5,17 @@ import { CorpusTrend, GATE } from "@/lib/api";
 import { ageDays, ageLabel, compact, num, pct, when } from "@/lib/format";
 import { Badge } from "./ui";
 
-/** The cover image is a raw-payload field the scraper may or may not have set. */
+/**
+ * The cover frame.
+ *
+ * The API flattens it to `thumbnail`; older scrapes kept it under the raw
+ * payload as `coverUrl`, so both are checked. TikTok CDN URLs are signed and
+ * expire, which is why a broken image is a normal outcome here rather than a
+ * bug — the card degrades to a placeholder and keeps every other field.
+ */
 export function coverUrl(t: CorpusTrend): string | null {
+  if (typeof t.thumbnail === "string" && t.thumbnail.startsWith("http"))
+    return t.thumbnail;
   const raw = (t.raw || {}) as Record<string, unknown>;
   for (const k of ["coverUrl", "cover_url", "cover", "thumbnail", "thumbnailUrl"]) {
     const v = raw[k];
@@ -25,14 +34,16 @@ export function TrendCard({
   const [rawOpen, setRawOpen] = useState(false);
   const [imgOk, setImgOk] = useState(true);
   const age = ageDays(t.posted_at, t.age_days);
-  const stale = age !== null && age > maxAgeDays;
+  // The server computes `stale` against the same window; trust it when present.
+  const stale =
+    typeof t.stale === "boolean" ? t.stale : age !== null && age > maxAgeDays;
   const cover = coverUrl(t);
 
   return (
     <div
       className={`flex gap-3 rounded-lg border p-2.5 ${
         stale
-          ? "border-zinc-800 bg-zinc-900/20 opacity-75"
+          ? "border-amber-950 bg-zinc-900/20"
           : "border-zinc-800 bg-zinc-900/50"
       }`}
     >
@@ -48,8 +59,8 @@ export function TrendCard({
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-center text-[9px] leading-tight text-zinc-700">
-            {cover ? "cover\nblocked" : "no\ncover"}
+          <div className="flex h-full w-full items-center justify-center whitespace-pre text-center text-[9px] leading-tight text-zinc-700">
+            {cover ? "cover\nexpired" : "no\ncover"}
           </div>
         )}
         {stale && (
@@ -65,22 +76,21 @@ export function TrendCard({
             @{t.author || "unknown"}
           </span>
           {t.format && <Badge tone="violet">{t.format}</Badge>}
-          {t.platform && t.platform !== "tiktok" && (
-            <Badge tone="info">{t.platform}</Badge>
-          )}
-          {stale ? (
+          {t.query && <Badge tone="neutral">{t.query}</Badge>}
+          {age === null ? (
+            <Badge tone="bad">no posted_at</Badge>
+          ) : stale ? (
             <Badge tone="warn" title={`posted ${when(t.posted_at)}`}>
-              {ageLabel(age)} old · past {maxAgeDays}d
+              {ageLabel(age)} · past {maxAgeDays}d
             </Badge>
           ) : (
             <Badge tone="good" title={`posted ${when(t.posted_at)}`}>
               {ageLabel(age)}
             </Badge>
           )}
-          {age === null && <Badge tone="bad">no posted_at</Badge>}
         </div>
 
-        <p className="mt-1 line-clamp-3 text-[12.5px] leading-snug text-zinc-300">
+        <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-[12.5px] leading-snug text-zinc-300">
           {t.caption || t.title || (
             <span className="italic text-zinc-600">no caption</span>
           )}
@@ -88,8 +98,7 @@ export function TrendCard({
 
         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-zinc-500">
           <span title="trend_score">
-            score{" "}
-            <b className="text-zinc-200">{num(t.trend_score ?? null, 0)}</b>
+            score <b className="text-zinc-200">{num(t.trend_score ?? null)}</b>
           </span>
           <span title="views">
             <b className="text-zinc-300">{compact(t.views)}</b> views
@@ -110,7 +119,10 @@ export function TrendCard({
 
         {t.hashtags && t.hashtags.length > 0 && (
           <div className="mt-1 truncate text-[11px] text-zinc-600">
-            {t.hashtags.slice(0, 10).map((h) => `#${h.replace(/^#/, "")}`).join(" ")}
+            {t.hashtags
+              .slice(0, 10)
+              .map((h) => `#${h.replace(/^#/, "")}`)
+              .join(" ")}
           </div>
         )}
 

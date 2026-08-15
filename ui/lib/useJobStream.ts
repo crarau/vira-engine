@@ -76,9 +76,8 @@ export function useJobStream(jobId: string) {
 
     let es: EventSource | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let openedWith = 0;
 
-    const startPolling = (why: string) => {
+    const startPolling = () => {
       if (!alive || pollTimer) return;
       setFeed("polling");
       const tick = async () => {
@@ -132,15 +131,14 @@ export function useJobStream(jobId: string) {
         }
         // EventSource retries on its own. Only give up when it has never
         // delivered a frame — that is a missing endpoint, not a blip.
-        openedWith = seen.current.size;
-        if (openedWith === 0) {
+        if (seen.current.size === 0) {
           es?.close();
           es = null;
-          startPolling("stream never opened");
+          startPolling();
         }
       };
     } catch {
-      startPolling("EventSource unavailable");
+      startPolling();
     }
 
     return () => {
