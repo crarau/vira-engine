@@ -1,0 +1,40 @@
+services:
+  - type: worker
+    name: vira-engine
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m vira.worker
+    envVars:
+      # Lovable Cloud — publishable key is public by design (RLS-bound).
+      - key: SUPABASE_URL
+        value: https://otsqjpmsiysitpkqoejr.supabase.co
+      - key: SUPABASE_KEY
+        value: sb_publishable_kJfcznb5ZUS99xf4ulBw7w_10R62tZs
+
+      # Loop behaviour. 1800s, capped at 3 companies — an unattended loop on a
+      # metered LLM needs a ceiling before it needs a schedule.
+      - key: TICK_SECONDS
+        value: "1800"
+      - key: MAX_COMPANIES_PER_TICK
+        value: "3"
+      - key: DRY_RUN
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+
+      # Secrets — set in the Render dashboard, never in this file.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AGENT_EMAIL
+        sync: false
+      - key: AGENT_PASSWORD
+        sync: false
+      - key: AGENT_USER_ID
+        sync: false
+      - key: DEMO_PRESCRIPT_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
