@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   API_BASE,
+  callFromRecipe,
   gateFor,
   getRecipe,
   getVideo,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/api";
 import { num, secs, when } from "@/lib/format";
 import { rememberJob } from "@/lib/recent";
+import { CallList, CallTally } from "@/components/Prompts";
 import { ScoreBreakdown } from "@/components/ScoreBreakdown";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import {
@@ -496,12 +498,14 @@ function RecipeTab({
   calls: LlmCall[];
   videoId: string;
 }) {
-  const [open, setOpen] = useState<Set<number>>(new Set([1]));
   if (error) return <ErrorBox error={error} />;
   if (!recipe) return <Loading what="loading the recipe" />;
 
   const settings = (recipe.settings || {}) as Record<string, unknown>;
   const plan = (recipe.plan || {}) as Record<string, unknown>;
+  // Same normalisation the live trace uses, so a call reads identically whether
+  // you are watching it happen or reading it back a week later.
+  const prompts = calls.map(callFromRecipe);
 
   return (
     <div className="space-y-3">
@@ -538,103 +542,30 @@ function RecipeTab({
       </Panel>
 
       <Panel
-        title={`Prompts, verbatim — ${calls.length} LLM call${calls.length === 1 ? "" : "s"}`}
+        title="Prompts, verbatim"
         right={
-          <a
-            href={`${API_BASE}/v1/videos/${videoId}/recipe`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[11px] text-sky-400 hover:text-sky-300"
-          >
-            raw JSON ↗
-          </a>
+          <div className="flex items-center gap-3">
+            <CallTally calls={prompts} />
+            <a
+              href={`${API_BASE}/v1/videos/${videoId}/recipe`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] text-sky-400 hover:text-sky-300"
+            >
+              raw JSON ↗
+            </a>
+          </div>
         }
       >
-        {calls.length === 0 ? (
-          <Empty>No LLM calls recorded.</Empty>
+        {prompts.length === 0 ? (
+          <Empty>
+            No LLM calls recorded. Videos generated before provenance was wired
+            in have no prompts; anything since carries all of them.
+          </Empty>
         ) : (
-          <div className="space-y-2">
-            {calls.map((c) => {
-              const isOpen = open.has(c.n);
-              return (
-                <div
-                  key={c.n}
-                  className="rounded border border-zinc-800 bg-zinc-900/40"
-                >
-                  <button
-                    onClick={() =>
-                      setOpen((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(c.n)) next.delete(c.n);
-                        else next.add(c.n);
-                        return next;
-                      })
-                    }
-                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-zinc-900"
-                  >
-                    <span className="font-mono text-[11px] text-zinc-500">
-                      #{c.n}
-                    </span>
-                    <span className="font-mono text-[12px] text-zinc-200">
-                      {c.model}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-600">
-                      max_tokens {c.max_tokens ?? "—"} · stop {c.stop_reason ?? "—"}
-                    </span>
-                    <span className="ml-auto font-mono text-[10px] text-zinc-600">
-                      {(c.system_prompt?.length || 0) + (c.user_prompt?.length || 0)} chars in ·{" "}
-                      {c.response?.length || 0} out
-                    </span>
-                    <span className="text-zinc-600">{isOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {isOpen && (
-                    <div className="space-y-2 border-t border-zinc-800 p-2.5">
-                      <Verbatim label="system" text={c.system_prompt} />
-                      <Verbatim label="user" text={c.user_prompt} />
-                      <Verbatim label="response" text={c.response} tone="response" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <CallList calls={prompts} initiallyOpen={[1]} />
         )}
       </Panel>
-    </div>
-  );
-}
-
-function Verbatim({
-  label,
-  text,
-  tone,
-}: {
-  label: string;
-  text: string;
-  tone?: "response";
-}) {
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500">
-          {label}
-        </span>
-        <button
-          onClick={() => navigator.clipboard?.writeText(text || "")}
-          className="rounded border border-zinc-800 px-1 font-mono text-[9px] text-zinc-600 hover:text-zinc-300"
-        >
-          copy
-        </button>
-      </div>
-      <pre
-        className={`mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded border border-zinc-800 p-2 font-mono text-[10.5px] leading-relaxed ${
-          tone === "response"
-            ? "bg-zinc-950 text-emerald-200/70"
-            : "bg-black text-zinc-400"
-        }`}
-      >
-        {text || "—"}
-      </pre>
     </div>
   );
 }

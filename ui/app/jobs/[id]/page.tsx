@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { getVideo, Video } from "@/lib/api";
+import { callFromEvent, getVideo, promptChars, Video } from "@/lib/api";
 import { useJobStream } from "@/lib/useJobStream";
 import { secs, when } from "@/lib/format";
 import { StageStrip, Trace } from "@/components/Trace";
@@ -20,7 +20,10 @@ import {
 export default function JobPage() {
   const params = useParams<{ id: string }>();
   const jobId = params?.id || "";
-  const { events, job, feed, error } = useJobStream(jobId);
+  // Off by default: verbose is a different subscription and every prompt on it
+  // is kilobytes, so a page opened to check on a render does not pay for one.
+  const [verbose, setVerbose] = useState(false);
+  const { events, job, feed, error } = useJobStream(jobId, verbose);
   const [video, setVideo] = useState<Video | null>(null);
 
   // The terminal event carries the video id, so the film can be fetched the
@@ -35,6 +38,16 @@ export default function JobPage() {
     if (!videoId) return;
     getVideo(videoId).then(setVideo).catch(() => setVideo(null));
   }, [videoId]);
+
+  const spend = useMemo(() => {
+    const calls = events
+      .map((e, i) => callFromEvent(e, i + 1))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    return {
+      calls: calls.length,
+      chars: calls.reduce((n, c) => n + promptChars(c), 0),
+    };
+  }, [events]);
 
   const startedAt = job?.created_at || events[0]?.ts;
   const elapsed = useElapsed(startedAt, job?.status);
@@ -100,6 +113,15 @@ export default function JobPage() {
           sub={video?.score ? `score ${video.score.overall.toFixed(2)}` : ""}
         />
         <Stat
+          label="llm calls"
+          value={verbose ? spend.calls : "—"}
+          sub={
+            verbose
+              ? `${spend.chars.toLocaleString()} chars of prompt`
+              : "verbose off"
+          }
+        />
+        <Stat
           label="duration"
           value={video ? secs(video.duration_s) : "—"}
           sub={video ? `${video.mode} mode` : ""}
@@ -129,7 +151,13 @@ export default function JobPage() {
             )
           }
         >
-          <Trace events={events} live={!!running} startedAt={startedAt} />
+          <Trace
+            events={events}
+            live={!!running}
+            startedAt={startedAt}
+            verbose={verbose}
+            onVerbose={setVerbose}
+          />
         </Panel>
 
         <div className="space-y-4">
@@ -192,6 +220,13 @@ export default function JobPage() {
               <li>
                 <b className="text-zinc-300">closed</b> — a terminal event
                 arrived. Nothing more is coming.
+              </li>
+              <li>
+                <b className="text-lime-400">verbose</b> — resubscribes at{" "}
+                <code>?level=debug</code>, which adds every model call with its
+                prompts, verbatim and untruncated. Filtered on the server, so
+                the ordinary feed never carries them. Turning it on mid-run
+                backfills the calls already made.
               </li>
             </ul>
           </Panel>

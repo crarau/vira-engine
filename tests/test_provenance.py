@@ -261,3 +261,75 @@ async def test_finish_creates_the_output_directory(tmp_path):
         pass
     finish(rec)
     assert (target / "recipe.json").exists()
+
+
+# --- which stage made the call ---------------------------------------------
+
+
+async def test_a_captured_call_names_its_stage_when_the_api_is_driving(
+    tmp_path, anthropic_stub
+):
+    """The recipe reads better when a prompt says where it came from.
+
+    Only the API worker tracks a stage, so this is the path a job takes; the CLI
+    keeps recording an empty one, which the recipe renders as no annotation at
+    all rather than as a wrong one.
+    """
+    from vira.api import events
+
+    anthropic_stub('{"hook": "yes"}')
+    job = "5c4b3a29-1111-2222-3333-444455556666"
+    try:
+        with events.watching(job):
+            events.set_stage("critique")
+            async with Recorder(tmp_path) as rec:
+                await complete(PROMPT, system=SYSTEM)
+    finally:
+        events.bus.forget(job)
+
+    assert rec.calls[0]["stage"] == "critique"
+
+
+async def test_a_cli_call_records_no_stage(tmp_path, anthropic_stub):
+    anthropic_stub('{"hook": "yes"}')
+    async with Recorder(tmp_path) as rec:
+        await complete(PROMPT, system=SYSTEM)
+
+    assert rec.calls[0]["stage"] == ""
+
+
+async def test_the_director_records_its_own_prompts_too(tmp_path):
+    """The one model in the system that does not go through `vira.llm`.
+
+    Its instructions decide the shape of the whole film, so an agentic recipe
+    that omitted them recorded the crew's homework and not the brief that set it.
+    """
+    from vira.agentic.crew import DIRECTOR_INSTRUCTIONS, Production, _record_turn
+
+    seen: list[tuple] = []
+    p = Production.__new__(Production)
+    p.log = []
+    p.on_event = lambda stage, msg, level, data: seen.append((stage, level, data))
+
+    class Call:
+        id = "call_1"
+        function = type("F", (), {"name": "write_script", "arguments": '{"beat_count": 5}'})()
+
+    reply = type("M", (), {"content": None, "tool_calls": [Call()]})()
+
+    async with Recorder(tmp_path) as rec:
+        _record_turn(
+            p, turn=1,
+            messages=[{"role": "system", "content": DIRECTOR_INSTRUCTIONS},
+                      {"role": "user", "content": "Brand: Sunday Oats"}],
+            reply=reply, model="gpt-5.4", elapsed_ms=1200, stop_reason="tool_calls",
+        )
+
+    assert rec.calls[0]["system_prompt"] == DIRECTOR_INSTRUCTIONS
+    assert "Sunday Oats" in rec.calls[0]["user_prompt"]
+    assert "write_script" in rec.calls[0]["response"]
+    assert rec.calls[0]["stage"] == "director:turn1"
+
+    stage, level, data = seen[0]
+    assert (stage, level) == ("llm", "debug")
+    assert data["system_prompt"] == DIRECTOR_INSTRUCTIONS

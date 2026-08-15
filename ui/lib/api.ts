@@ -236,6 +236,99 @@ export async function getCorpusCategories(): Promise<CorpusCategory[]> {
 
 export const getCorpusStats = () => api<CorpusStats>("/v1/corpus/stats");
 
+// ---------------------------------------------------------- suggestions
+
+/**
+ * `/v1/suggest/{slug}` — what to type in the product box, drawn from the
+ * corpus rows selection would actually pick.
+ *
+ * The endpoint costs an LLM call (~35s cold, ~0.2s cached), so a UI should
+ * fetch it once per company and only pass `refresh` on an explicit click.
+ */
+export interface BioQuality {
+  /** `junk` means the bio said nothing usable and the suggestions know it. */
+  verdict: "usable" | "thin" | "junk";
+  reason: string;
+  chars: number;
+  words: number;
+  lean_on_corpus: boolean;
+}
+
+export interface Suggestion {
+  /** Drops straight into the product field. 8–20 words, names a mechanism. */
+  product: string;
+  angle: string;
+  lane: string;
+  lane_reason: string;
+  /** trend_keys from the slice. Resolve against `sources` for the URL. */
+  grounded_in: string[];
+  evidence: string[];
+}
+
+export interface SuggestionSource {
+  trend_key: string;
+  source_url: string;
+  author?: string;
+  caption?: string;
+  format?: string;
+  views?: number;
+  age_days?: number | null;
+}
+
+export interface SuggestionsResponse {
+  company_slug: string;
+  company_name: string;
+  category: string;
+  bio_quality: BioQuality;
+  suggestions: Suggestion[];
+  sources: SuggestionSource[];
+  corpus: {
+    slice_size: number;
+    rejected: Record<string, number>;
+    category: string;
+    max_age_days: number;
+  };
+  note: string | null;
+  generated_at: string;
+  cached: boolean;
+  elapsed_ms: number;
+}
+
+const NO_BIO_VERDICT: BioQuality = {
+  verdict: "usable",
+  reason: "",
+  chars: 0,
+  words: 0,
+  lean_on_corpus: false,
+};
+
+export async function getSuggestions(
+  slug: string,
+  refresh = false,
+): Promise<SuggestionsResponse> {
+  const payload = await api<Partial<SuggestionsResponse>>(
+    `/v1/suggest/${encodeURIComponent(slug)}${refresh ? "?refresh=true" : ""}`,
+  );
+  return {
+    company_slug: payload.company_slug ?? slug,
+    company_name: payload.company_name ?? slug,
+    category: payload.category ?? "",
+    bio_quality: payload.bio_quality ?? NO_BIO_VERDICT,
+    suggestions: unwrap<Suggestion>(payload, "suggestions"),
+    sources: payload.sources ?? [],
+    corpus: payload.corpus ?? {
+      slice_size: 0,
+      rejected: {},
+      category: "",
+      max_age_days: 90,
+    },
+    note: payload.note ?? null,
+    generated_at: payload.generated_at ?? "",
+    cached: Boolean(payload.cached),
+    elapsed_ms: payload.elapsed_ms ?? 0,
+  };
+}
+
 // --------------------------------------------------------------- videos
 
 export interface Score {
@@ -327,6 +420,8 @@ export interface RecipeCorpusRow {
 
 export interface LlmCall {
   n: number;
+  /** Which pipeline stage made the call. Empty on a recipe written by the CLI. */
+  stage?: string;
   model: string;
   max_tokens: number | null;
   stop_reason: string | null;
@@ -408,11 +503,86 @@ export interface EventsWindow {
   events: TraceEvent[];
 }
 
-export const getJobEvents = (id: string, after = 0) =>
-  api<EventsWindow>(`/v1/jobs/${id}/events?after=${after}`);
+/**
+ * `debug` is the verbose feed: every model call with its prompts, in full.
+ *
+ * The level is a server-side subscription rather than something to filter in
+ * the browser — a page watching at `info` never has a 12 KB prompt sent to it.
+ * Switching level mid-run leaves a gap in `seq`, which is the events that were
+ * deliberately not delivered, so a client that reopens the stream without an
+ * `after` cursor gets the whole buffer replayed at the new level.
+ */
+export type TraceLevel = "debug" | "info" | "warn" | "error";
 
-export const streamUrl = (id: string, after?: number) =>
-  `${API_BASE}/v1/jobs/${id}/stream${after ? `?after=${after}` : ""}`;
+export const getJobEvents = (id: string, after = 0, level: TraceLevel = "info") =>
+  api<EventsWindow>(`/v1/jobs/${id}/events?after=${after}&level=${level}`);
+
+export function streamUrl(id: string, after?: number, level: TraceLevel = "info") {
+  const q = new URLSearchParams({ level });
+  if (after) q.set("after", String(after));
+  return `${API_BASE}/v1/jobs/${id}/stream?${q}`;
+}
+
+// ------------------------------------------------------- prompts, either way
+//
+// The same model call reaches this UI from two places — live, as a `debug`
+// trace event, and afterwards, out of the recipe — and they are worth rendering
+// identically. `PromptCall` is the shape both normalise to, so one component
+// draws the job page's verbose panel and the video page's Recipe tab.
+
+export interface PromptCall {
+  n: number;
+  stage: string;
+  model: string;
+  max_tokens: number | null;
+  stop_reason: string | null;
+  system_prompt: string;
+  user_prompt: string;
+  response: string;
+  elapsed_ms: number | null;
+  /** Director turn, when the call came from the agentic loop. */
+  turn: number | null;
+}
+
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+const numOrNull = (v: unknown) => (typeof v === "number" ? v : null);
+
+export function callFromRecipe(c: LlmCall, i: number): PromptCall {
+  return {
+    n: c.n ?? i + 1,
+    stage: c.stage || "",
+    model: c.model || "—",
+    max_tokens: c.max_tokens ?? null,
+    stop_reason: c.stop_reason ?? null,
+    system_prompt: c.system_prompt || "",
+    user_prompt: c.user_prompt || "",
+    response: c.response || "",
+    elapsed_ms: null,
+    turn: null,
+  };
+}
+
+/** A `debug` event as a prompt call, or null when it is not one. */
+export function callFromEvent(e: TraceEvent, n: number): PromptCall | null {
+  const d = e.data || {};
+  if (d.kind !== "llm_call") return null;
+  return {
+    n,
+    stage: str(d.pipeline_stage) || e.stage,
+    model: str(d.model) || "—",
+    max_tokens: numOrNull(d.max_tokens),
+    stop_reason: typeof d.stop_reason === "string" ? d.stop_reason : null,
+    system_prompt: str(d.system_prompt),
+    user_prompt: str(d.user_prompt),
+    response: str(d.response),
+    elapsed_ms: numOrNull(d.elapsed_ms),
+    turn: numOrNull(d.turn),
+  };
+}
+
+export function promptChars(c: PromptCall): number {
+  return c.system_prompt.length + c.user_prompt.length;
+}
 
 export const createVideo = (body: {
   company_slug: string;

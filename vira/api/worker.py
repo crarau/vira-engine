@@ -16,6 +16,10 @@ What this module adds on top of the CLI entry points:
     `public/shots/<job_id>/`, narration to `public/narration-<job_id>.mp3`.
   - **A bound on the machine.** Renders are CPU-bound; N concurrent requests
     must not become N concurrent Remotion invocations.
+  - **A recipe and a live feed off the same calls.** The whole generation runs
+    inside a `Recorder` — so `GET /v1/videos/{id}/recipe` carries every prompt
+    verbatim — and inside `events.watching`, which is what lets `vira.llm`
+    publish those same prompts to `?level=debug` while the run is happening.
 
 The score and its disposition are computed here, after the creative work, in
 Python — same as the CLI. Nothing in the API can lower the evidence floor.
@@ -269,21 +273,16 @@ async def _produce(
         raise JobFailed(f"no company with slug {company_slug!r}")
     company = Company.from_row(row)
 
-    picked, rejected = await shortlist(supa, company, product)
-    await _note(job_id, f"verifying {len(picked)} source URLs", "verify",
-                    sources=len(picked))
-    picked, dead = await verify_all(picked)
-    if not picked:
-        raise JobFailed("nothing survived selection — no verified sources to build on")
-
-    await _note(job_id, f"analysing {len(picked)} verified sources", "analyze",
-                    verified=len(picked), dead=len(dead))
-    corpus = await analyze_corpus(company, product, picked)
-
     out_dir = _new_out_dir(company_slug, lane.name, mode)
     public = VIDEO_DIR / "public"
     shots_dir = public / "shots" / job_id
 
+    # The Recorder opens here, before selection, rather than after the corpus
+    # analysis: `analyze_corpus` is a model call, its prompt carries the whole
+    # corpus, and it decides what the writer is told the category rewards. A
+    # recipe that skipped it recorded the ad's second cause and not its first.
+    # (The CLI cannot do this — `variants.py` analyses once and shares the
+    # result across five recipes — but one API job is exactly one video.)
     async with Recorder(out_dir) as rec:
         rec.note("job_id", job_id)
         rec.note("mode", mode)
@@ -297,6 +296,17 @@ async def _produce(
         # in recipes.plan, so both fields survive.
         rec.note("revision_notes", notes or [])
         rec.note("regenerated_from_video_id", source_video_id)
+
+        picked, rejected = await shortlist(supa, company, product)
+        await _note(job_id, f"verifying {len(picked)} source URLs", "verify",
+                    sources=len(picked))
+        picked, dead = await verify_all(picked)
+        if not picked:
+            raise JobFailed("nothing survived selection — no verified sources to build on")
+
+        await _note(job_id, f"analysing {len(picked)} verified sources", "analyze",
+                    verified=len(picked), dead=len(dead))
+        corpus = await analyze_corpus(company, product, picked)
         rec.note("rejected_at_selection", rejected)
         rec.note("dead_urls", len(dead))
 

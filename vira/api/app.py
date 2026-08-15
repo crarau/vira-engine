@@ -43,7 +43,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from vira.api.db import init_db
-from vira.api.routes import corpus, companies, jobs, reviews, videos
+from vira.api.routes import corpus, companies, jobs, reviews, suggest, terac, videos
 from vira.api.worker import OUT_DIR
 
 log = logging.getLogger("vira.api")
@@ -93,6 +93,8 @@ app.include_router(companies.router)
 app.include_router(videos.router)
 app.include_router(jobs.router)
 app.include_router(reviews.router)
+app.include_router(suggest.router)
+app.include_router(terac.router)
 
 
 @app.exception_handler(LookupError)

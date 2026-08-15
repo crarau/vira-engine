@@ -10,7 +10,10 @@ import {
   getCompanies,
   getCorpusCompanies,
   getLanes,
+  getSuggestions,
   Lane,
+  Suggestion,
+  SuggestionsResponse,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { rememberJob, recentJobs, RecentJob } from "@/lib/recent";
@@ -22,6 +25,7 @@ import {
   Loading,
   Panel,
 } from "@/components/ui";
+import { BioVerdict, SuggestionCards } from "@/components/SuggestionCards";
 
 const ETA: Record<string, number> = { fast: 90, agentic: 360 };
 
@@ -55,6 +59,11 @@ function Generate() {
   const [submitErr, setSubmitErr] = useState<unknown>(null);
   const [recent, setRecent] = useState<RecentJob[]>([]);
 
+  const [suggestions, setSuggestions] = useState<SuggestionsResponse | null>(null);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestErr, setSuggestErr] = useState<unknown>(null);
+  const [regenerating, setRegenerating] = useState(false);
+
   useEffect(() => {
     getCompanies().then(setCompanies).catch(setErr);
     getLanes().then(setLanes).catch(setErr);
@@ -65,6 +74,50 @@ function Generate() {
       .catch(() => setCorpusCompanies([]));
     setRecent(recentJobs());
   }, []);
+
+  /**
+   * Suggestions are per company and cost a ~35s LLM call on a cold cache, so
+   * this fires on the company change and nothing else. The cancelled flag is
+   * what stops a slow first company from overwriting a fast second one.
+   */
+  useEffect(() => {
+    if (!slug) {
+      setSuggestions(null);
+      setSuggestErr(null);
+      return;
+    }
+    let cancelled = false;
+    setSuggestions(null);
+    setSuggestErr(null);
+    setSuggestLoading(true);
+    getSuggestions(slug)
+      .then((d) => !cancelled && setSuggestions(d))
+      .catch((e) => !cancelled && setSuggestErr(e))
+      .finally(() => !cancelled && setSuggestLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  /** A suggestion is a starting point: it fills the box, it does not lock it. */
+  function pickSuggestion(s: Suggestion) {
+    setProduct(s.product);
+    setProductTouched(true);
+    if (s.lane) setLane(s.lane);
+  }
+
+  async function regenerateSuggestions() {
+    if (!slug || regenerating) return;
+    setRegenerating(true);
+    setSuggestErr(null);
+    try {
+      setSuggestions(await getSuggestions(slug, true));
+    } catch (e) {
+      setSuggestErr(e);
+    } finally {
+      setRegenerating(false);
+    }
+  }
 
   /** Local companies, annotated with whatever the corpus knows about them. */
   const merged = useMemo(() => {

@@ -26,8 +26,16 @@ export type Feed = "connecting" | "sse" | "polling" | "closed";
  *
  * The switch happens when the stream errors before delivering anything, which
  * is what "the endpoint isn't built yet" looks like from the client side.
+ *
+ * `verbose` reopens the feed at `?level=debug`, which adds every model call with
+ * its prompts. It reopens rather than filters because the level is a server-side
+ * subscription — the point is that a page not in verbose mode never receives the
+ * prompts at all. The reconnect deliberately drops the `after` cursor so the
+ * server replays the buffer at the new level and the calls already made appear;
+ * events collected so far are kept and deduplicated on `seq`, so turning it on
+ * four minutes into a run backfills rather than restarts.
  */
-export function useJobStream(jobId: string) {
+export function useJobStream(jobId: string, verbose = false) {
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [job, setJob] = useState<Job | null>(null);
   const [feed, setFeed] = useState<Feed>("connecting");
@@ -36,14 +44,21 @@ export function useJobStream(jobId: string) {
   const seen = useRef<Set<number>>(new Set());
   const lastSeq = useRef(0);
   const done = useRef(false);
+  const watching = useRef<string | null>(null);
 
   useEffect(() => {
     if (!jobId) return;
     let alive = true;
-    seen.current = new Set();
-    lastSeq.current = 0;
-    done.current = false;
-    setEvents([]);
+    // Only a different job is a fresh start. A level change is the same job
+    // seen at a different resolution, and clearing here would blank the trace.
+    if (watching.current !== jobId) {
+      watching.current = jobId;
+      seen.current = new Set();
+      lastSeq.current = 0;
+      done.current = false;
+      setEvents([]);
+    }
+    const level = verbose ? "debug" : "info";
     setFeed("connecting");
 
     const push = (e: TraceEvent) => {
@@ -83,7 +98,7 @@ export function useJobStream(jobId: string) {
       const tick = async () => {
         if (!alive) return;
         try {
-          const win = await getJobEvents(jobId, lastSeq.current);
+          const win = await getJobEvents(jobId, lastSeq.current, level);
           win.events.forEach(push);
           if (win.complete) {
             finish();
@@ -110,7 +125,7 @@ export function useJobStream(jobId: string) {
     };
 
     try {
-      es = new EventSource(streamUrl(jobId));
+      es = new EventSource(streamUrl(jobId, undefined, level));
       es.onopen = () => {
         if (alive) setFeed("sse");
       };
@@ -146,7 +161,7 @@ export function useJobStream(jobId: string) {
       es?.close();
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [jobId]);
+  }, [jobId, verbose]);
 
   return { events, job, feed, error };
 }

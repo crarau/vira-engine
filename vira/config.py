@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     azure_openai_api_key: str | None = None
     agent_model: str = "gpt-5.4"
 
+    # --- terac (the human panel) ------------------------------------------
+    # Recruits and pays the judges who rank a review batch. Unset means the
+    # /v1/terac/* routes report "not configured" rather than failing calls; the
+    # generation pipeline never touches Terac and runs fine without it.
+    terac_api_key: str | None = None
+    # Vira's default project. Every opportunity is filed under a project, and
+    # this org has exactly one, so making it a default keeps the batch-publish
+    # call down to the arguments that actually vary.
+    terac_project_id: str = "cf60f5gh587n98a0fwosrzs6"
+
     # --- imagery ---------------------------------------------------------
     # "gemini" generates the written frame; "stock" searches Openverse for an
     # approximation of it. Generation wins on relevance by a wide margin.

@@ -339,6 +339,9 @@ async def test_get_recipe_returns_the_verbatim_prompts(job):
     assert stored["llm_calls"][0]["user_prompt"] == user
     assert [c["n"] for c in stored["llm_calls"]] == [1, 2]
     assert stored["llm_calls"][1]["max_tokens"] is None
+    # A recipe written before the stage was recorded still round-trips; the
+    # column is additive and empty means "nobody said", not "unknown stage".
+    assert stored["llm_calls"][0]["stage"] == ""
 
     # jsonb comes back as dicts and lists, not as JSON text.
     assert stored["plan"] == recipe["notes"]
@@ -539,3 +542,15 @@ async def test_hostile_text_survives_the_whole_pipeline(company):
     assert row["hook"] == hostile
 
     assert await scalar("SELECT to_regclass('public.llm_calls')::text") == "llm_calls"
+
+
+async def test_a_recipe_keeps_the_stage_each_prompt_came_from(job):
+    """Which stage wrote a prompt is what makes a long recipe navigable."""
+    recipe = recipe_fixture()
+    recipe["llm_calls"][0]["stage"] = "plan"
+    recipe["llm_calls"][1]["stage"] = "critique"
+
+    video = await store.create_video(job_id=job["id"], recipe=recipe)
+    stored = await store.get_recipe(video["id"])
+
+    assert [c["stage"] for c in stored["llm_calls"]] == ["plan", "critique"]

@@ -152,6 +152,7 @@ next release. Treat an unrecognised stage as a plain trace line — never drop i
 | `tool` | a Director tool call starting — "regenerating frame 3" | agentic |
 | `director` | the Director's own reasoning and budget decisions | agentic |
 | `crew` | a crew line with no more specific stage | agentic |
+| `llm` | one model call, prompts verbatim. **`debug` only** — see Verbose | both |
 | `score` | the evidence gate | both |
 | `render` | Remotion | both |
 | `done` | **terminal.** `data.video_id`, `data.hook`, `data.mp4_path` | both |
@@ -182,6 +183,65 @@ page. Show "reconnecting" and let it recover.
 
 A working reference client is `examples/watch.html` — one file, no
 dependencies, no build step. Open it, paste a base URL and a job id.
+
+### Verbose: watching the prompts
+
+Both endpoints take `?level=` — `debug` · `info` · `warn` · `error`, defaulting
+to `info`. At `debug` the feed also carries every model call, with the prompts
+in full.
+
+```
+GET /v1/jobs/{job_id}/stream?level=debug
+GET /v1/jobs/{job_id}/events?level=debug&after=0
+```
+
+```json
+{
+  "seq": 9,
+  "stage": "llm",
+  "level": "debug",
+  "message": "claude-sonnet-5 · write · 13,131 chars in, 2,962 out · stop end_turn",
+  "data": {
+    "kind": "llm_call",
+    "pipeline_stage": "write",
+    "model": "claude-sonnet-5",
+    "max_tokens": 5000,
+    "stop_reason": "end_turn",
+    "system_prompt": "…the whole thing…",
+    "user_prompt": "…the whole thing…",
+    "response": "…the whole thing…",
+    "elapsed_ms": 8412
+  }
+}
+```
+
+The agentic path adds two more `debug` shapes, both on `stage: "tool"` and both
+distinguished by `data.kind`:
+
+| `data.kind` | When | Carries |
+|---|---|---|
+| `llm_call` | any model call | the fields above. Director turns set `pipeline_stage: "director"`, `data.turn`, and a `user_prompt` that is the whole conversation so far — because that is what was sent |
+| `tool_call` | before a specialist runs | `tool`, `turn`, `args` (parsed) and `arguments` (the model's raw JSON string) |
+| `tool_result` | after it returns | `tool`, `turn`, `result` — the exact string the Director's next turn reads |
+
+Four things worth knowing before turning it on:
+
+- **Nothing is truncated server-side.** A prompt clipped to fit a buffer cannot
+  be pasted back into the code that sent it, which is the only reason to carry
+  it. The client decides what to show.
+- **It is a different subscription, not a client-side filter.** A watcher on the
+  default feed never has a prompt queued for it, so verbose costs nothing to
+  anyone who did not ask.
+- **Sequence numbers are shared across levels.** Switching level mid-run leaves
+  a gap in `seq`; the gap is the events you chose not to receive, not a drop.
+  Turning verbose on late replays the calls already made, at your level.
+- **The ring is bounded in bytes as well as events.** 400 events was a memory
+  bound when a line was a sentence and is not when it is a prompt, so a job's
+  history is capped at 8 MB and the process at 64 MB, evicting oldest-first.
+  In practice a fast run buffers ~100 KB and an agentic one ~2 MB.
+
+The durable copy of the same prompts is `GET /v1/videos/{id}/recipe`, which is
+where to look once the run is over.
 
 ### Reconnection
 
@@ -248,7 +308,8 @@ every worker and `/stream` is best-effort-plus-fallback.
 ### What is not in the stream
 
 Events are conversation, not record. They live in memory, they are capped at 400
-per job, and the oldest job is evicted once 128 are tracked. The durable account
+per job and 8 MB per job, and the oldest job is evicted once 128 are tracked or
+64 MB is held. The durable account
 of a run is the recipe — verbatim prompts, corpus, settings — written atomically
 with the video and read back through `GET /v1/videos/{id}/recipe`. Nothing that
 matters after the mp4 exists is only in an event.
