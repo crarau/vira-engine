@@ -1,7 +1,7 @@
 # Spec — agentic video generation
 
-Turning the current fixed pipeline into a crew of specialists, modelled on the
-`@openai/agents` system already running in `mentorly-website/lib/assistant/`.
+Turning the current fixed pipeline into a crew of specialists built on
+`@openai/agents`, running against gpt-5.4.
 
 ## Why, and where the line sits
 
@@ -152,19 +152,22 @@ DIRECTOR: plan the shape
 The `re-check only what changed` line is the efficiency that makes this
 affordable. Regenerating one image is 8 seconds; regenerating the film is 74.
 
-## Implementation, matching Mentorly
+## Implementation
 
-Reuse the boundary pattern from `mentorly-website/lib/assistant/agentsSdk.ts` —
-`require('@openai/agents')` behind hand-written minimal types, so the project
-type-checker never touches the SDK's zod-v4 declarations.
+Load the SDK behind a thin, hand-typed boundary rather than importing its types
+directly. The SDK's declarations pull in zod v4, whose `.d.cts` uses TypeScript
+5 syntax; a project on an older `tsc` cannot parse it. Requiring the CommonJS
+build and re-exporting behind local minimal types means the project
+type-checker never touches the SDK's declarations, while runtime stays the real
+SDK.
 
 ```ts
-// video/agents/sdk.ts — copy of the Mentorly boundary
+// video/agents/sdk.ts
 const agents = require('@openai/agents')
 export const { Agent, run, tool, setDefaultOpenAIClient, setOpenAIAPI } = agents
 ```
 
-Wiring, as in `agent.ts`:
+Wiring:
 
 ```ts
 setDefaultOpenAIClient(azureClient)
@@ -222,10 +225,11 @@ skills/
 └── critic/        watch
 ```
 
-That structure is what lets a second product (a Mentorly explainer, a
-TourCockpit demo) use `motion` and `voice` without inheriting an ad engine.
-`mentorly-website/lib/assistant` already separates `tools.ts` from `guards.ts`
-from `prompt.ts` for the same reason.
+That structure is what lets a second product — a feature explainer, a product
+demo, a launch video — use `motion` and `voice` without inheriting an ad engine.
+Keep tool definitions, guardrails and prompts in separate modules for the same
+reason: the guardrails outlive any one agent, and the prompts change far more
+often than the tool contracts.
 
 ## Honest cost
 
@@ -254,7 +258,7 @@ fast lane (`--fast`), and run the agent loop when quality matters more than the
 4. Add the Director loop with `maxTurns=8` and a hard wall-clock budget.
 5. Keep `--fast` permanently. Most runs will not need the crew.
 
-## Guardrails, borrowed from Mentorly's `guards.ts`
+## Guardrails
 
 - The evidence gate runs **after** the loop, in Python, and no agent can call it
   or see its threshold.
