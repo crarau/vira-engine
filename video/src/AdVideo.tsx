@@ -33,6 +33,7 @@ export type AdVideoProps = {
   caption: string;
   hashtags: string[];
   audioSrc: string | null;
+  audioFile?: string;
   fps: number;
   beats: BeatProps[];
 };
@@ -76,12 +77,15 @@ const Backdrop: React.FC<{ beats: BeatProps[] }> = ({ beats }) => {
         let scale = 1.08;
         let tx = 0;
         let ty = 0;
-        if (mode === 0) scale = 1.05 + p * 0.14;                    // slow push in
-        if (mode === 1) { scale = 1.20 - p * 0.12; tx = -p * 40; }  // pull back, drift left
-        if (mode === 2) { scale = 1.14; ty = -p * 70; }             // vertical pan
-        if (mode === 3) {                                            // fast punch, then settle
-          scale = interpolate(p, [0, 0.18, 1], [1.34, 1.10, 1.16]);
-          tx = (random(`d${i}`) - 0.5) * 36 * p;
+        // Restrained on purpose: these frames are generated natively at 9:16
+        // and composed for it, so scale is crop. Big Ken Burns throws the
+        // subject out of frame — which is a worse sin than looking static.
+        if (mode === 0) scale = 1.01 + p * 0.06;                    // slow push in
+        if (mode === 1) { scale = 1.08 - p * 0.06; tx = -p * 16; }  // pull back, drift left
+        if (mode === 2) { scale = 1.06; ty = -p * 26; }             // vertical pan
+        if (mode === 3) {                                            // small punch, then settle
+          scale = interpolate(p, [0, 0.18, 1], [1.12, 1.03, 1.06]);
+          tx = (random(`d${i}`) - 0.5) * 14 * p;
         }
 
         return (
@@ -197,18 +201,26 @@ const Slide: React.FC<CapProps> = ({ beat, absFrame, fps, local }) => {
   );
 };
 
-/** 3 — POP: each word snaps in with its own tilt, scattered baseline. */
+/** 3 — POP: each word snaps in with its own tilt, scattered baseline.
+ *
+ * `gap` is generous and the scale range is tight on purpose. A span scaled to
+ * 1.12 visually overflows its layout box by ~9px per side, which eats a normal
+ * gap and runs the words together — the layout box does not grow with a
+ * transform. Horizontal separation therefore comes from padding (which is
+ * layout) rather than from gap alone.
+ */
 const Pop: React.FC<CapProps> = ({ beat, absFrame, fps }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: "6px 18px", maxWidth: 900 }}>
+  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: "14px 10px", maxWidth: 900 }}>
     {beat.words.map((word, i) => {
       const { live, past } = useSpoken(word, absFrame);
       const pop = spring({ frame: absFrame - word.startFrame, fps, config: { damping: 8, mass: 0.4, stiffness: 200 }, durationInFrames: 12 });
-      const tilt = (random(`t${word.w}${i}`) - 0.5) * 9;
+      const tilt = (random(`t${word.w}${i}`) - 0.5) * 7;
       return (
         <span key={i} style={{
-          fontSize: 78, fontWeight: 900, letterSpacing: -2.5,
-          color: live ? ACCENT : FG, opacity: past ? 0.55 : Math.max(pop, 0.15),
-          transform: `scale(${0.7 + pop * 0.42}) rotate(${tilt}deg) translateY(${(random(`y${i}`) - 0.5) * 16}px)`,
+          fontSize: 74, fontWeight: 900, letterSpacing: -2,
+          padding: "0 11px",
+          color: live ? ACCENT : FG, opacity: past ? 0.55 : Math.max(pop, 0.22),
+          transform: `scale(${0.82 + pop * 0.22}) rotate(${tilt}deg) translateY(${(random(`y${i}`) - 0.5) * 9}px)`,
           textShadow: live ? `0 0 40px ${ACCENT}80, 0 4px 18px #000` : "0 4px 18px #000",
           display: "inline-block",
         }}>{word.w}</span>
@@ -267,7 +279,7 @@ const Caption: React.FC<{ beat: BeatProps; index: number }> = ({ beat, index }) 
     <AbsoluteFill style={{ alignItems: "center", ...ANCHOR[index % ANCHOR.length], opacity: out }}>
       <div style={{ fontFamily: FONT, textAlign: "center" }}>
         <Treatment beat={beat} absFrame={beat.startFrame + local} fps={fps} local={local} />
-        <div style={{ marginTop: 26, fontSize: 23, fontWeight: 600, color: ACCENT, opacity: 0.72, letterSpacing: 0.4 }}>
+        <div style={{ marginTop: 62, fontSize: 21, fontWeight: 600, color: ACCENT, opacity: 0.7, letterSpacing: 0.4 }}>
           {beat.shot || beat.show}
         </div>
       </div>
@@ -276,7 +288,7 @@ const Caption: React.FC<{ beat: BeatProps; index: number }> = ({ beat, index }) 
 };
 
 export const AdVideo: React.FC<AdVideoProps> = ({
-  brand, hook, cta, hashtags, audioSrc, beats,
+  brand, hook, cta, hashtags, audioSrc, audioFile, beats,
 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames, fps } = useVideoConfig();
@@ -299,7 +311,7 @@ export const AdVideo: React.FC<AdVideoProps> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: INK }}>
-      {audioSrc ? <Audio src={staticFile("narration.mp3")} /> : null}
+      {audioSrc ? <Audio src={staticFile(audioFile ?? "narration.mp3")} /> : null}
 
       <AbsoluteFill style={{ transform: `translate(${bobX + shake}px, ${bobY}px) scale(1.03)` }}>
         <Backdrop beats={beats} />

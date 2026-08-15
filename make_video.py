@@ -18,7 +18,7 @@ from pathlib import Path
 from vira.config import settings
 from vira.models import Company, Remix
 from vira.render import VIDEO_DIR, build_props, render, write_props
-from vira.stock import fetch_shots
+from vira.shots import fetch_or_generate
 from vira.voice import synthesize
 
 OUT = Path("out")
@@ -43,8 +43,8 @@ async def main(path: str) -> int:
     public.mkdir(parents=True, exist_ok=True)
     shutil.copy(mp3, public / "narration.mp3")
 
-    print("finding stock footage…")
-    shots = await fetch_shots(company, product, remix, public / "shots")
+    print("building imagery…")
+    shots = await fetch_or_generate(company, product, remix, public / "shots")
     found = sum(1 for s in shots if s.get("file"))
     print(f"  {found}/{len(shots)} beats have imagery")
     for s in shots:

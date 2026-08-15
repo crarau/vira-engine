@@ -24,12 +24,31 @@ not its subject.
 - Every beat is filmable with a phone, the product, and one person. No studios, \
 no actors, no drone shots.
 - Spoken lines are for saying out loud. Short. Contractions. No brochure copy.
-- Total narration 20-32 seconds. That is roughly 55-85 words. Do not exceed it.
+- Hit the target length the director set. Roughly 2.6 words per second.
 - grounded_in must list the trend keys you actually borrowed from.
+
+You also DIRECT the video, beat by beat. For each beat choose:
+- motion: how the caption behaves. One of stack (words rise, calm),
+  punch (one huge line, hard emphasis), slide (left bar wipe, listing a fact),
+  pop (words snap in scattered, chaotic energy), banner (solid slab, a claim).
+- camera: push (slow in, building), pull (out, revealing), pan (drifting),
+  punch (fast in, a hit), hold (static, let it land).
+- delivery: an ElevenLabs performance tag for the line, e.g. [excited],
+  [whispers], [deadpan], [frustrated], [confident], [laughs], [serious].
+
+Vary them. Consecutive beats must not repeat the same motion. Match the choice
+to the line: a confession is not "punch", a punchline is not "stack".
 - JSON only."""
 
 PROMPT = """# Brand
 {company}
+
+# The director's plan for THIS film — execute it, do not renegotiate it
+Structure: {structure}
+Device: {device}
+Pacing: {pacing}
+Opening move (first 1.5s): {opening_move}
+The turn: {turn_at}
 
 # What works in this category right now
 Dominant formats: {formats}
@@ -49,7 +68,10 @@ Write ONE ad for the product above. Return JSON:
     {{"t": 0.0,
       "say": "the line spoken over this beat",
       "show": "what is on screen",
-      "shot": "camera direction, e.g. 'close on the can, handheld, natural light'"}}
+      "shot": "framing + light, e.g. 'close on the can, handheld, natural light'",
+      "motion": "stack|punch|slide|pop|banner",
+      "camera": "push|pull|pan|punch|hold",
+      "delivery": "[excited]"}}
   ],
   "caption": "the post caption, 1-2 sentences plus CTA",
   "hashtags": ["lowercase", "no", "hash", "symbol"],
@@ -58,11 +80,13 @@ Write ONE ad for the product above. Return JSON:
   "grounded_in": ["VIRA-TR-...", ...]
 }}
 
-5-8 beats. The first beat IS the hook."""
+Exactly {beat_count} beats, totalling about {target_seconds} seconds.
+The first beat IS the hook."""
 
 
 async def build_remix(
-    company: Company, product: str, trends: list[Trend], corpus: CorpusAnalysis
+    company: Company, product: str, trends: list[Trend], corpus: CorpusAnalysis,
+    plan=None,
 ) -> Remix:
     if not trends:
         raise ValueError("no verified trends — cannot ground a remix")
@@ -70,6 +94,13 @@ async def build_remix(
     data = await complete_json(
         PROMPT.format(
             company=company.context(product),
+            structure=getattr(plan, "structure", "") or "director's choice",
+            device=getattr(plan, "device", "") or "director's choice",
+            pacing=getattr(plan, "pacing", "") or "steady",
+            opening_move=getattr(plan, "opening_move", "") or "stop the scroll",
+            turn_at=getattr(plan, "turn_at", "") or "the midpoint",
+            beat_count=getattr(plan, "beat_count", 7),
+            target_seconds=getattr(plan, "target_seconds", 28),
             formats="; ".join(corpus.dominant_formats) or "unknown",
             hooks="; ".join(corpus.recurring_hooks) or "unknown",
             shared=corpus.what_top_performers_share or "unknown",
@@ -80,12 +111,20 @@ async def build_remix(
         max_tokens=5000,   # timed shooting scripts are long; 2500 truncated every time
     )
 
+    return parse_remix(data, trends)
+
+
+def parse_remix(data: dict, trends: list[Trend]) -> Remix:
+    """Turn a director/writer JSON payload into a validated Remix."""
     beats = [
         Beat(
             t=float(b.get("t", 0) or 0),
             say=str(b.get("say", "")).strip(),
             show=str(b.get("show", "")).strip(),
             shot=str(b.get("shot", "")).strip(),
+            motion=str(b.get("motion", "")).strip().lower(),
+            camera=str(b.get("camera", "")).strip().lower(),
+            delivery=str(b.get("delivery", "")).strip(),
         )
         for b in data.get("beats", [])
         if str(b.get("say", "")).strip()

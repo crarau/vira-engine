@@ -112,6 +112,10 @@ class Beat(BaseModel):
     say: str
     show: str
     shot: str = ""
+    # Authored by the director, not inferred downstream.
+    motion: str = ""      # caption treatment: stack|punch|slide|pop|banner
+    delivery: str = ""    # ElevenLabs v3 performance tag, e.g. "[excited]"
+    camera: str = ""      # push|pull|pan|punch|hold
     # Populated by the voice stage from character timestamps.
     start_s: float | None = None
     end_s: float | None = None

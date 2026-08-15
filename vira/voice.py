@@ -47,34 +47,52 @@ class VoiceError(RuntimeError):
     pass
 
 
-def direct(remix: Remix) -> str:
-    """Insert performance tags. First beat attacks, last beat closes hard."""
+def direct(remix: Remix, lane=None) -> str:
+    """Insert performance tags. First beat attacks, last beat closes hard.
+
+    A lane supplies its own palette so a founder confession is not delivered in
+    the same register as a hard-sell demo.
+    """
+    opening = lane.opening if lane else OPENING
+    closing = lane.closing if lane else CLOSING
+    middle = (lane.middle if lane and lane.middle else MIDDLE)
+
     n = len(remix.beats)
     parts: list[str] = []
     for i, beat in enumerate(remix.beats):
         line = beat.say.strip()
         if not line:
             continue
-        if i == 0:
-            tag = OPENING
+        # The director's own choice wins; the lane palette is the fallback.
+        if beat.delivery:
+            tag = beat.delivery
+        elif i == 0:
+            tag = opening
         elif i == n - 1:
-            tag = CLOSING
+            tag = closing
         else:
-            tag = MIDDLE[(i - 1) % len(MIDDLE)]
+            tag = middle[(i - 1) % len(middle)]
         parts.append(f"{tag} {line}")
     return " ".join(parts)
 
 
-async def synthesize(remix: Remix, out_dir: Path) -> tuple[Path, float]:
+async def synthesize(remix: Remix, out_dir: Path, lane=None) -> tuple[Path, float]:
     """Render narration to mp3 and stamp real timings on every beat and word."""
     s = settings()
-    if not (s.elevenlabs_api_key and s.elevenlabs_voice_id):
+    voice_id = (lane.voice_id if lane else None) or s.elevenlabs_voice_id
+    if not (s.elevenlabs_api_key and voice_id):
         raise VoiceError("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID are not set")
 
-    text = direct(remix) if s.voice_tags else remix.narration()
+    text = direct(remix, lane) if s.voice_tags else remix.narration()
 
     body: dict = {"text": text, "model_id": s.elevenlabs_model}
-    if s.elevenlabs_model == "eleven_multilingual_v2":
+    if s.elevenlabs_model == "eleven_v3":
+        # v3 reads stability as a creativity dial, not a consistency one.
+        # 0.0 = "Creative": it actually acts on the performance tags. Measured
+        # 25% more dynamic range than 1.0 on the same line — which is the whole
+        # difference between a read and a performance.
+        body["voice_settings"] = {"stability": s.voice_stability_v3}
+    elif s.elevenlabs_model == "eleven_multilingual_v2":
         # Only v2 exposes these. Low stability = wide emotional range, which is
         # what stops the read sounding like a screen reader.
         body["voice_settings"] = {
@@ -86,7 +104,7 @@ async def synthesize(remix: Remix, out_dir: Path) -> tuple[Path, float]:
 
     async with httpx.AsyncClient(timeout=240) as c:
         r = await c.post(
-            TTS_URL.format(voice_id=s.elevenlabs_voice_id),
+            TTS_URL.format(voice_id=voice_id),
             headers={"xi-api-key": s.elevenlabs_api_key, "Content-Type": "application/json"},
             json=body,
         )
@@ -109,7 +127,8 @@ async def synthesize(remix: Remix, out_dir: Path) -> tuple[Path, float]:
     _assign(remix, words)
 
     total = float(ends[-1]) if ends else 0.0
-    log.info("narration %.1fs · %d words · model %s", total, len(words), s.elevenlabs_model)
+    log.info("narration %.1fs · %d words · %s · %s", total, len(words),
+             s.elevenlabs_model, (lane.voice_note if lane else voice_id))
     return mp3, total
 
 

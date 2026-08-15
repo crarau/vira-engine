@@ -20,9 +20,17 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
+# 11 cores here: 2 renders x 4 workers leaves headroom for the OS and the
+# still-running image/TTS calls. Raise RENDER_PARALLEL on a bigger machine.
+RENDER_PARALLEL = 2
+RENDER_CONCURRENCY = 4
+
 from vira.analyze import analyze_corpus
+from vira.director import critique, plan as make_plan, revise
+from vira.lanes import LANES
 from vira.config import settings
 from vira.models import Company, Remix
 from vira.provenance import Recorder
@@ -30,34 +38,13 @@ from vira.remix import build_remix
 from vira.render import VIDEO_DIR, build_props, render, write_props
 from vira.score import disposition, score_remix
 from vira.select import shortlist
-from vira.stock import fetch_shots
+from vira.shots import fetch_or_generate
 from vira.supa import Supa, get_company
 from vira.verify import verify_all
 from vira.voice import synthesize
 
-# Five distinct creative lanes. Each is appended to the remix brief so the model
-# commits to one angle instead of averaging them into mush.
-LANES: list[tuple[str, str]] = [
-    ("problem-first",
-     "Open on the FRUSTRATION the product removes. Name the pain in the first "
-     "three words. The product does not appear until the midpoint."),
-    ("demo-first",
-     "Open mid-demonstration, product already in hand and in use. No setup, no "
-     "context. Show the thing working before you explain anything."),
-    ("founder-story",
-     "First person, founder voice. Why this exists, what was broken, what you "
-     "changed. Intimate and unpolished, shot like a confession to camera."),
-    ("social-proof",
-     "Lead with other people's reactions and results. Rapid, specific, "
-     "quotable. The brand speaks last and briefly."),
-    ("contrarian",
-     "Open by disagreeing with the accepted wisdom in this category. State the "
-     "popular advice, reject it, then prove the rejection with the product."),
-]
-
-
 async def build_variant(
-    company: Company, product: str, picked, corpus, lane: tuple[str, str], out_dir: Path
+    company: Company, product: str, picked, corpus, lane, out_dir: Path
 ) -> tuple[str, Remix, object, tuple[str, str | None]]:
     """Build one variant, recording every prompt that produced it.
 
@@ -65,14 +52,26 @@ async def build_variant(
     video holds the verbatim system and user prompts, the corpus in scope, and
     the settings in force. Change a prompt there, re-run, get a different ad.
     """
-    name, brief = lane
+    name, brief = lane.name, lane.brief
     steered = Company(**{**company.model_dump(),
                          "mission": f"{company.mission}\n\nCREATIVE DIRECTION FOR THIS AD: {brief}"})
 
     async with Recorder(out_dir / name) as rec:
         rec.note("lane", name)
         rec.note("lane_brief", brief)
-        remix = await build_remix(steered, product, picked, corpus)
+        rec.note("voice", lane.voice_note)
+        rec.note("look", lane.look)
+
+        # plan the shape → write it → have a hostile viewer read it → revise
+        vp = await make_plan(company, product, brief, corpus)
+        rec.note("plan", vp.model_dump())
+        remix = await build_remix(steered, product, picked, corpus, vp)
+
+        crit = await critique(remix, vp)
+        rec.note("critique", crit.model_dump())
+        if crit.notes:
+            remix = await revise(remix, crit, picked)
+
         score = await score_remix(company, product, remix, picked)
         s = settings()
         rec.finish(
@@ -92,7 +91,8 @@ async def build_variant(
     return name, remix, score, disposition(score)
 
 
-async def main(slug: str, product: str, n: int, render_video: bool) -> int:
+async def main(slug: str, product: str, n: int, render_video: bool,
+               only: list[str] | None, stamp: str) -> int:
     supa = Supa()
     row = await get_company(supa, slug)
     if not row:
@@ -112,10 +112,21 @@ async def main(slug: str, product: str, n: int, render_video: bool) -> int:
     corpus = await analyze_corpus(company, product, picked)
     print(f"whitespace: {corpus.whitespace}\n")
 
-    out_dir = Path("out") / slug
+    # Versioned so every run is inspectable and nothing is overwritten.
+    # `out/<slug>/latest` always points at the newest.
+    root = Path("out") / slug
+    root.mkdir(parents=True, exist_ok=True)
+    existing = [d for d in root.glob("v*-*") if d.is_dir()]
+    version = f"v{len(existing) + 1:03d}-{stamp}"
+    out_dir = root / version
     out_dir.mkdir(parents=True, exist_ok=True)
+    latest = root / "latest"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    latest.symlink_to(out_dir.name)
+    print(f"→ {out_dir}  (also out/{slug}/latest)\n")
 
-    lanes = LANES[:n]
+    lanes = LANES[:n] if not only else [l for l in LANES if l.name in only]
     results = await asyncio.gather(
         *(build_variant(company, product, picked, corpus, lane, out_dir) for lane in lanes),
         return_exceptions=True,
@@ -125,7 +136,7 @@ async def main(slug: str, product: str, n: int, render_video: bool) -> int:
 
     for lane, res in zip(lanes, results):
         if isinstance(res, BaseException):
-            print(f"  {lane[0]:15} FAILED: {res}")
+            print(f"  {lane.name:15} FAILED: {res}")
             continue
         name, remix, score, (dispo, reason) = res
         print(f"  {name:15} score {score.overall:<5} evidence {score.evidence:<4} → {dispo}"
@@ -144,7 +155,8 @@ async def main(slug: str, product: str, n: int, render_video: bool) -> int:
         path = out_dir / f"{name}.json"
         path.write_text(json.dumps(payload, indent=2))
         manifest.append({"variant": name, "json": str(path), "hook": remix.hook,
-                         "score": score.overall, "disposition": dispo})
+                         "score": score.overall, "disposition": dispo,
+                         "voice": next(l.voice_note for l in LANES if l.name == name)})
 
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {len(manifest)} variants to {out_dir}/")
@@ -152,31 +164,63 @@ async def main(slug: str, product: str, n: int, render_video: bool) -> int:
     if not render_video:
         return 0
 
+    # --- rendering, parallelised -------------------------------------
+    #
+    # This used to be a sequential for-loop, which made five videos cost five
+    # times one video. Three changes fix that:
+    #
+    #   1. Assets are namespaced per variant (shots/<variant>/, narration-<v>.mp3)
+    #      so concurrent renders cannot read each other's files.
+    #   2. Within a variant, TTS and image generation run concurrently — they
+    #      both depend on the remix but not on each other.
+    #   3. Renders run RENDER_PARALLEL at a time, each capped at RENDER_CONCURRENCY
+    #      workers. Five renders each grabbing six workers would thrash 11 cores.
     public = VIDEO_DIR / "public"
-    for entry in manifest:
+    sem = asyncio.Semaphore(RENDER_PARALLEL)
+
+    async def produce(entry: dict) -> None:
         name = entry["variant"]
-        print(f"\n=== rendering {name} ===")
         data = json.loads(Path(entry["json"]).read_text())
         remix = Remix(**data["remix"])
+        vdir = out_dir / name
         try:
-            mp3, duration = await synthesize(remix, out_dir / name)
-            shutil.copy(mp3, public / "narration.mp3")
-            shots = await fetch_shots(company, product, remix, public / "shots")
-            props = build_props(company, product, remix, audio_path=mp3,
+            # Voice and imagery are independent; overlap them.
+            lane = next(l for l in LANES if l.name == name)
+            mp3, shots = await asyncio.gather(
+                synthesize(remix, vdir, lane),
+                fetch_or_generate(company, product, remix,
+                                  public / "shots" / name, lane.look),
+            )
+            mp3_path, duration = mp3
+
+            # Namespace the audio into public/ and the image paths into props.
+            audio_name = f"narration-{name}.mp3"
+            shutil.copy(mp3_path, public / audio_name)
+            for shot in shots:
+                if shot.get("file"):
+                    shot["file"] = f"{name}/{shot['file']}"
+
+            props = build_props(company, product, remix, audio_path=public / audio_name,
                                 duration_s=duration + 2.4, shots=shots)
-            write_props(props, out_dir / name)
+            write_props(props, vdir)
+
             mp4 = out_dir / f"{slug}-{name}.mp4"
-            render(out_dir / name / "props.json", mp4)
-            size = mp4.stat().st_size / 1_000_000
-            print(f"  {mp4}  ({size:.1f} MB, {duration:.1f}s)")
+            async with sem:
+                print(f"  rendering {name}…")
+                await asyncio.to_thread(
+                    render, vdir / "props.json", mp4, concurrency=RENDER_CONCURRENCY
+                )
             entry["mp4"] = str(mp4)
+            print(f"  done {name}  ({mp4.stat().st_size / 1_000_000:.1f} MB, {duration:.1f}s)")
         except Exception as exc:  # noqa: BLE001 - one bad variant must not stop the rest
-            print(f"  FAILED: {exc}")
+            print(f"  FAILED {name}: {exc}")
             entry["mp4"] = None
 
+    t0 = time.monotonic()
+    await asyncio.gather(*(produce(e) for e in manifest))
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     rendered = sum(1 for e in manifest if e.get("mp4"))
-    print(f"\n{rendered}/{len(manifest)} videos rendered into {out_dir}/")
+    print(f"\n{rendered}/{len(manifest)} videos in {time.monotonic() - t0:.0f}s → {out_dir}/")
     return 0
 
 
@@ -186,5 +230,8 @@ if __name__ == "__main__":
     p.add_argument("--product", required=True)
     p.add_argument("-n", type=int, default=5)
     p.add_argument("--no-video", action="store_true")
+    p.add_argument("--only", nargs="*", default=None,
+                   help="render just these lanes, e.g. --only founder-story")
     a = p.parse_args()
-    sys.exit(asyncio.run(main(a.slug, a.product, a.n, not a.no_video)))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    sys.exit(asyncio.run(main(a.slug, a.product, a.n, not a.no_video, a.only, stamp)))

@@ -49,8 +49,11 @@ def build_props(
                 "say": b.say,
                 "show": b.show,
                 "shot": b.shot,
+                "motion": b.motion or "",
+                "camera": b.camera or "",
                 "startFrame": int(start * s.fps),
                 "endFrame": int(end * s.fps),
+                # May include a per-variant subdirectory, e.g. "demo-first/shot00.jpg".
                 "image": shot_meta.get("file"),
                 "credit": shot_meta.get("credit"),
                 # Word timings drive the karaoke highlight.
@@ -73,6 +76,8 @@ def build_props(
         "caption": remix.caption,
         "hashtags": remix.hashtags,
         "audioSrc": str(audio_path.resolve()) if audio_path else None,
+        # Namespaced so concurrent renders never read each other's assets.
+        "audioFile": audio_path.name if audio_path else "narration.mp3",
         "durationInFrames": max(int(duration_s * s.fps), s.fps),
         "fps": s.fps,
         "beats": beats,
@@ -86,7 +91,10 @@ def write_props(props: dict, out_dir: Path) -> Path:
     return path
 
 
-def render(props_path: Path, out_file: Path, *, composition: str = "AdVideo") -> Path:
+def render(
+    props_path: Path, out_file: Path, *, composition: str = "AdVideo",
+    concurrency: int | None = None,
+) -> Path:
     """Invoke the Remotion CLI. Requires `npm install` inside video/ first."""
     if shutil.which("npx") is None:
         raise RuntimeError("npx not found — install Node to render")
@@ -98,6 +106,10 @@ def render(props_path: Path, out_file: Path, *, composition: str = "AdVideo") ->
         "npx", "remotion", "render", composition, str(out_file.resolve()),
         f"--props={props_path.resolve()}",
     ]
+    if concurrency:
+        # Lower per-render concurrency when several renders share the machine,
+        # otherwise five renders each grabbing 6 workers thrash 11 cores.
+        cmd.append(f"--concurrency={concurrency}")
     log.info("rendering: %s", " ".join(cmd))
     proc = subprocess.run(cmd, cwd=VIDEO_DIR, capture_output=True, text=True)
     if proc.returncode != 0:

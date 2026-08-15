@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # Agent account used for writes. Reads work without it.
     agent_email: str | None = None
     agent_password: str | None = None
+    # The agent's auth.users id — RLS matches it against companies.owner_id.
+    agent_user_id: str | None = None
 
     # --- selection ------------------------------------------------------
     # A 2021 mop video is not a trend, however many views it has.
@@ -34,6 +36,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     llm_model: str = "claude-sonnet-5"
 
+    # --- imagery ---------------------------------------------------------
+    # "gemini" generates the written frame; "stock" searches Openverse for an
+    # approximation of it. Generation wins on relevance by a wide margin.
+    image_source: str = "gemini"
+    gemini_api_key: str | None = None
+    image_model: str = "gemini-3.1-flash-image"
+
     # --- voice / render --------------------------------------------------
     elevenlabs_api_key: str | None = None
     # Liam — "Energetic, Social Media Creator". A pitchman, not a narrator.
@@ -44,6 +53,8 @@ class Settings(BaseSettings):
     # Low stability is deliberate: it widens emotional range. High stability
     # produces the flat, mechanical read that makes an ad sound like a subtitle.
     voice_stability: float = 0.25
+    # v3 only: 0.0 Creative / 0.5 Natural / 1.0 Robust.
+    voice_stability_v3: float = 0.0
     voice_similarity: float = 0.6
     voice_style: float = 0.75
 
