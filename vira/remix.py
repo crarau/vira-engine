@@ -77,7 +77,7 @@ async def build_remix(
             corpus="\n\n".join(t.brief() for t in trends),
         ),
         system=SYSTEM,
-        max_tokens=2500,
+        max_tokens=5000,   # timed shooting scripts are long; 2500 truncated every time
     )
 
     beats = [

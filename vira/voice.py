@@ -76,11 +76,18 @@ async def synthesize(remix: Remix, out_dir: Path) -> tuple[Path, float]:
 def _stamp_beats(
     remix: Remix, text: str, starts: list[float], ends: list[float]
 ) -> None:
-    """Map each beat's spoken line onto character offsets in the joined narration.
+    """Map beats — and every word inside them — onto real character timings.
 
     `narration()` joins beats with a single space, so offsets are recoverable by
     walking the same construction rather than fuzzy-matching.
+
+    Word timings are what make karaoke captions possible: each word lights up on
+    the exact frame it is spoken, because the timing came from the synthesiser
+    rather than from a guess about speaking rate.
     """
+    from vira.models import Word
+
+    n = len(starts)
     cursor = 0
     for beat in remix.beats:
         line = beat.say.strip()
@@ -89,8 +96,23 @@ def _stamp_beats(
         idx = text.find(line, cursor)
         if idx == -1:  # punctuation normalisation by the API; fall back to order
             idx = cursor
-        end_idx = min(idx + len(line) - 1, len(starts) - 1)
-        beat.start_s = round(float(starts[min(idx, len(starts) - 1)]), 3)
+        end_idx = min(idx + len(line) - 1, n - 1)
+        beat.start_s = round(float(starts[min(idx, n - 1)]), 3)
         beat.end_s = round(float(ends[end_idx]), 3)
         beat.t = beat.start_s
+
+        # Walk the line word by word, tracking the absolute character offset.
+        beat.words = []
+        offset = idx
+        for token in line.split(" "):
+            if not token:
+                offset += 1
+                continue
+            s = min(offset, n - 1)
+            e = min(offset + len(token) - 1, n - 1)
+            beat.words.append(
+                Word(w=token, start=round(float(starts[s]), 3), end=round(float(ends[e]), 3))
+            )
+            offset += len(token) + 1
+
         cursor = idx + len(line) + 1

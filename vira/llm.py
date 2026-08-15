@@ -34,6 +34,17 @@ async def complete(
         messages=[{"role": "user", "content": prompt}],
     )
     text = "".join(b.text for b in msg.content if b.type == "text")
+
+    # Capture prompts verbatim so any generated video can be traced back and
+    # tweaked. No-op when no Recorder is active.
+    from vira.provenance import current
+
+    if rec := current():
+        rec.capture(
+            system=system or "", prompt=prompt, model=s.llm_model,
+            max_tokens=max_tokens, response=text, stop_reason=msg.stop_reason,
+        )
+
     return text, msg.stop_reason
 
 

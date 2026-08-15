@@ -97,6 +97,14 @@ class Company(BaseModel):
         return "\n".join(lines)
 
 
+class Word(BaseModel):
+    """One spoken word with real timing, derived from character timestamps."""
+
+    w: str
+    start: float
+    end: float
+
+
 class Beat(BaseModel):
     """One shot. `t` is a draft until the voice stage replaces it with real timing."""
 
@@ -107,6 +115,8 @@ class Beat(BaseModel):
     # Populated by the voice stage from character timestamps.
     start_s: float | None = None
     end_s: float | None = None
+    # Word-level timing drives karaoke captions.
+    words: list[Word] = Field(default_factory=list)
 
 
 class Remix(BaseModel):

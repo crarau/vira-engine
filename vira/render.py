@@ -28,8 +28,43 @@ def build_props(
     *,
     audio_path: Path | None,
     duration_s: float,
+    shots: list[dict] | None = None,
 ) -> dict:
+    """Everything the composition needs, with all timing already resolved to frames.
+
+    Remotion does no timing maths of its own — frame numbers here come from
+    ElevenLabs character timestamps, so a copy change re-times the video without
+    anyone touching the composition.
+    """
     s = settings()
+    shots = shots or []
+
+    beats = []
+    for i, b in enumerate(remix.beats):
+        start = b.start_s if b.start_s is not None else b.t
+        end = b.end_s if b.end_s is not None else b.t + 3
+        shot_meta = shots[i] if i < len(shots) else {}
+        beats.append(
+            {
+                "say": b.say,
+                "show": b.show,
+                "shot": b.shot,
+                "startFrame": int(start * s.fps),
+                "endFrame": int(end * s.fps),
+                "image": shot_meta.get("file"),
+                "credit": shot_meta.get("credit"),
+                # Word timings drive the karaoke highlight.
+                "words": [
+                    {
+                        "w": w.w,
+                        "startFrame": int(w.start * s.fps),
+                        "endFrame": int(w.end * s.fps),
+                    }
+                    for w in b.words
+                ],
+            }
+        )
+
     return {
         "brand": company.name,
         "product": product,
@@ -40,18 +75,7 @@ def build_props(
         "audioSrc": str(audio_path.resolve()) if audio_path else None,
         "durationInFrames": max(int(duration_s * s.fps), s.fps),
         "fps": s.fps,
-        "beats": [
-            {
-                "say": b.say,
-                "show": b.show,
-                "shot": b.shot,
-                "startFrame": int((b.start_s if b.start_s is not None else b.t) * s.fps),
-                "endFrame": int(
-                    (b.end_s if b.end_s is not None else b.t + 3) * s.fps
-                ),
-            }
-            for b in remix.beats
-        ],
+        "beats": beats,
     }
 
 
