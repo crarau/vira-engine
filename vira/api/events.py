@@ -28,6 +28,11 @@ in a dropped event, never in a broken generation.
 
 **Sequence numbers are per job and start at 1.** They are the SSE event id, so
 `Last-Event-ID` resumption is "give me everything after n" and nothing else.
+
+**Verbose is opt-in on the server, not filtered in the browser.** `debug` events
+carry whole prompts — 1–12 KB each — and a client that did not ask for them
+never has one queued, let alone serialised. `?level=debug` is what turns them
+on; everything defaults to info and above.
 """
 
 from __future__ import annotations
@@ -36,10 +41,11 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, Iterator
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +58,26 @@ RING_SIZE = 400
 # otherwise be retained forever; the oldest is evicted, not the busiest.
 MAX_TRACKED_JOBS = 128
 
+# The count cap alone stopped being a memory bound the moment verbose mode
+# started putting whole prompts on the wire. A measured fast run sends system +
+# user prompts of 1–12 KB and gets 0.3–3.6 KB back, so one `llm` event is
+# ~16 KB and 400 of them would be 6 MB *per job* — 800 MB across the 128 jobs
+# this bus tracks. Both caps therefore apply, whichever bites first:
+#
+#   MAX_JOB_BYTES   an agentic run's ~60 model calls at 30 KB is 1.8 MB, so 8 MB
+#                   is comfortable headroom and still evicts a runaway.
+#   MAX_TOTAL_BYTES the process-wide ceiling. Reached only if several verbose
+#                   jobs are watched at once, and it drops whole finished jobs.
+#
+# Nothing is truncated to fit — a half prompt is not a prompt you can paste
+# back, which is the entire point of carrying it. The oldest events go instead.
+MAX_JOB_BYTES = 8 * 1024 * 1024
+MAX_TOTAL_BYTES = 64 * 1024 * 1024
+
 # Must be >= RING_SIZE so a fresh subscriber's replay always fits without the
-# overflow policy kicking in on connect.
+# overflow policy kicking in on connect. Queued events are references to the
+# same Event objects the ring holds, so a subscriber costs pointers, not
+# prompts, and the byte caps above bound both.
 SUBSCRIBER_QUEUE = RING_SIZE + 64
 
 # A job ends exactly once, in one of these two ways. The stream closes on them
@@ -78,6 +102,7 @@ STAGES = (
     "tool",       # a Director tool call starting (agentic)
     "director",   # the Director's own reasoning and budget decisions
     "crew",       # a crew trace line with no more specific stage
+    "llm",        # one model call, verbatim prompts included (debug only)
     "score",      # the evidence gate
     "render",     # Remotion
     "done",       # terminal, carries video_id
@@ -85,6 +110,23 @@ STAGES = (
 )
 
 LEVELS = ("debug", "info", "warn", "error")
+
+# Severity order, so "give me info and above" is one comparison rather than a
+# set the caller has to assemble. `debug` is deliberately rank 0 and excluded by
+# default everywhere: a prompt event is several KB and a normal watcher wants a
+# trace, not a transcript.
+LEVEL_RANK = {name: i for i, name in enumerate(LEVELS)}
+DEFAULT_LEVEL = "info"
+
+
+def normalise_level(value: str | None) -> str:
+    """A client-supplied level, or the default. Never raises, never 422s.
+
+    An unknown level means "show me the normal feed" rather than an error: this
+    is a progress stream, and refusing to open it over a typo in a query string
+    would be a worse failure than quietly showing one line too few.
+    """
+    return value if value in LEVEL_RANK else DEFAULT_LEVEL
 
 
 def _now() -> str:
@@ -113,6 +155,25 @@ class Event:
     def terminal(self) -> bool:
         return self.stage in TERMINAL_STAGES
 
+    @property
+    def rank(self) -> int:
+        return LEVEL_RANK.get(self.level, LEVEL_RANK[DEFAULT_LEVEL])
+
+    @property
+    def weight(self) -> int:
+        """Roughly how many bytes this event costs the ring.
+
+        An estimate, not a measurement: the expensive members of `data` are the
+        prompt strings and they are top-level, so summing their lengths is
+        accurate where it matters and free where it does not. Calling
+        `json.dumps` here would put a serialisation of every prompt on the hot
+        path of a 350-second pipeline to make a cache-eviction decision.
+        """
+        n = len(self.message) + 128
+        for key, value in self.data.items():
+            n += len(key) + (len(value) if isinstance(value, str) else 32)
+        return n
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "seq": self.seq,
@@ -137,6 +198,20 @@ class Event:
         return f"id: {self.seq}\ndata: {body}\n\n"
 
 
+@dataclass(slots=True, eq=False)
+class _Sub:
+    """One open connection, and the least severe level it asked for.
+
+    The filter lives on the subscriber rather than on the reader so a client
+    watching at `info` never has a 12 KB prompt copied into its queue at all —
+    the point of a server-side level is that debug traffic does not reach a
+    stream that did not ask for it.
+    """
+
+    queue: asyncio.Queue[Event]
+    min_rank: int
+
+
 class JobBus:
     """Fan-out of job events to whoever is watching, plus what they missed.
 
@@ -145,12 +220,23 @@ class JobBus:
     interleaved with a subscribe or another publish.
     """
 
-    def __init__(self, *, ring_size: int = RING_SIZE, max_jobs: int = MAX_TRACKED_JOBS) -> None:
+    def __init__(
+        self,
+        *,
+        ring_size: int = RING_SIZE,
+        max_jobs: int = MAX_TRACKED_JOBS,
+        max_job_bytes: int = MAX_JOB_BYTES,
+        max_total_bytes: int = MAX_TOTAL_BYTES,
+    ) -> None:
         self._ring_size = ring_size
         self._max_jobs = max_jobs
+        self._max_job_bytes = max_job_bytes
+        self._max_total_bytes = max_total_bytes
         self._buffers: OrderedDict[str, deque[Event]] = OrderedDict()
         self._seq: dict[str, int] = {}
-        self._subs: dict[str, set[asyncio.Queue[Event]]] = {}
+        self._bytes: dict[str, int] = {}
+        self._total_bytes = 0
+        self._subs: dict[str, set[_Sub]] = {}
 
     # -- producing ---------------------------------------------------------
 
@@ -180,7 +266,7 @@ class JobBus:
                 level=level if level in LEVELS else "info",
                 data=dict(data or {}),
             )
-            self._buffer(job_id).append(event)
+            self._retain(job_id, event)
             self._deliver(job_id, event)
             return event
         except Exception:  # noqa: BLE001 - the contract is that this cannot fail
@@ -195,36 +281,61 @@ class JobBus:
     def _buffer(self, job_id: str) -> deque[Event]:
         buf = self._buffers.get(job_id)
         if buf is None:
-            buf = deque(maxlen=self._ring_size)
+            # No `maxlen`: the ring is trimmed by `_retain`, which has to honour
+            # a byte budget as well as a count and therefore needs to see what
+            # it is dropping. A deque that silently discards its own left end
+            # would leave the byte accounting wrong forever.
+            buf = deque()
             self._buffers[job_id] = buf
-            self._evict()
+            self._bytes[job_id] = 0
         self._buffers.move_to_end(job_id)
         return buf
 
+    def _retain(self, job_id: str, event: Event) -> None:
+        """Buffer the event and bring the job back inside both caps."""
+        buf = self._buffer(job_id)
+        buf.append(event)
+        self._charge(job_id, event.weight)
+        while buf and (len(buf) > self._ring_size or self._bytes[job_id] > self._max_job_bytes):
+            self._charge(job_id, -buf.popleft().weight)
+        self._evict()
+
+    def _charge(self, job_id: str, delta: int) -> None:
+        self._bytes[job_id] = self._bytes.get(job_id, 0) + delta
+        self._total_bytes += delta
+
     def _evict(self) -> None:
-        """Forget the least recently active job once we are tracking too many.
+        """Forget the least recently active job once we are holding too much.
 
         A job still being watched is never the least recent — its producer is
         publishing into it — so this drops history for finished work, which is
-        the only history nobody is going to ask for.
+        the only history nobody is going to ask for. The byte ceiling matters
+        because verbose mode made a single job's history three orders of
+        magnitude larger than the count cap assumed.
         """
-        while len(self._buffers) > self._max_jobs:
+        while len(self._buffers) > self._max_jobs or self._total_bytes > self._max_total_bytes:
             stale, _ = self._buffers.popitem(last=False)
+            self._total_bytes -= self._bytes.pop(stale, 0)
             self._seq.pop(stale, None)
             self._subs.pop(stale, None)
+            if not self._buffers:  # pragma: no cover - defensive, keeps the loop finite
+                self._total_bytes = 0
+                return
 
     def _deliver(self, job_id: str, event: Event) -> None:
-        for q in tuple(self._subs.get(job_id, ())):
+        for sub in tuple(self._subs.get(job_id, ())):
+            if event.rank < sub.min_rank:
+                continue
             try:
-                q.put_nowait(event)
+                sub.queue.put_nowait(event)
             except asyncio.QueueFull:
                 # A reader this far behind is a stalled connection, not a slow
                 # one. Drop its oldest event rather than the newest: the client
                 # sees a gap in `seq`, which docs/API.md tells it to repair with
                 # GET /v1/jobs/{id}/events. Blocking here would stall the render.
                 try:
-                    q.get_nowait()
-                    q.put_nowait(event)
+                    sub.queue.get_nowait()
+                    sub.queue.put_nowait(event)
                 except (asyncio.QueueEmpty, asyncio.QueueFull):  # pragma: no cover
                     pass
 
@@ -239,18 +350,28 @@ class JobBus:
         buf = self._buffers.get(str(job_id))
         return bool(buf) and buf[-1].terminal
 
-    def history(self, job_id: str, *, after_seq: int | None = None) -> list[Event]:
-        """Buffered events, oldest first, optionally only those after a sequence."""
+    def history(
+        self, job_id: str, *, after_seq: int | None = None, level: str = DEFAULT_LEVEL
+    ) -> list[Event]:
+        """Buffered events, oldest first, at `level` and above.
+
+        `level` defaults to info, so every existing caller keeps the feed it had
+        before prompts started arriving on the same bus. Filtering here rather
+        than in the route means the debug payload is never assembled into a
+        response for a client that did not ask for it.
+        """
         buf = self._buffers.get(str(job_id))
         if not buf:
             return []
-        if after_seq is None:
-            return list(buf)
-        return [e for e in buf if e.seq > after_seq]
+        floor = LEVEL_RANK.get(level, LEVEL_RANK[DEFAULT_LEVEL])
+        return [
+            e for e in buf
+            if e.rank >= floor and (after_seq is None or e.seq > after_seq)
+        ]
 
     @asynccontextmanager
     async def subscribe(
-        self, job_id: str, *, after_seq: int | None = None
+        self, job_id: str, *, after_seq: int | None = None, level: str = DEFAULT_LEVEL
     ) -> AsyncIterator[asyncio.Queue[Event]]:
         """A queue of this job's events, primed with whatever the client missed.
 
@@ -261,15 +382,16 @@ class JobBus:
         """
         job_id = str(job_id)
         q: asyncio.Queue[Event] = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE)
-        for event in self.history(job_id, after_seq=after_seq):
+        for event in self.history(job_id, after_seq=after_seq, level=level):
             q.put_nowait(event)
-        self._subs.setdefault(job_id, set()).add(q)
+        sub = _Sub(queue=q, min_rank=LEVEL_RANK.get(level, LEVEL_RANK[DEFAULT_LEVEL]))
+        self._subs.setdefault(job_id, set()).add(sub)
         try:
             yield q
         finally:
             subs = self._subs.get(job_id)
             if subs is not None:
-                subs.discard(q)
+                subs.discard(sub)
                 if not subs:
                     self._subs.pop(job_id, None)
 
@@ -282,6 +404,13 @@ class JobBus:
         self._buffers.pop(job_id, None)
         self._seq.pop(job_id, None)
         self._subs.pop(job_id, None)
+        self._total_bytes -= self._bytes.pop(job_id, 0)
+
+    def buffered_bytes(self, job_id: str | None = None) -> int:
+        """What the ring is holding, for one job or for the whole process."""
+        if job_id is None:
+            return self._total_bytes
+        return self._bytes.get(str(job_id), 0)
 
 
 # One bus per process. Module-level rather than app state because the producers
@@ -299,6 +428,89 @@ def publish(
 ) -> Event | None:
     """Publish to the process bus. A no-op with no subscribers, and never raises."""
     return bus.publish(job_id, stage, message, level=level, data=data)
+
+
+# -- the ambient job, and the prompts published against it ------------------
+#
+# `vira.llm.complete` is called from ten places that know nothing about HTTP,
+# and threading a job id through all of them would put an API concept into every
+# creative stage's signature. The same problem `vira.provenance` already solved
+# with a context variable, solved the same way: the worker declares which job
+# its task is running, and anything downstream that wants to say something can.
+#
+# Unset everywhere else — `variants.py` and `agentic_video.py` never enter
+# `watching`, so `publish_llm_call` returns without touching the bus and the CLI
+# behaves exactly as it did before verbose mode existed.
+
+_job: ContextVar[str | None] = ContextVar("vira_job_id", default=None)
+_stage: ContextVar[str] = ContextVar("vira_job_stage", default="")
+
+
+def current_job() -> str | None:
+    """The job this task is generating for, or None outside the API worker."""
+    return _job.get()
+
+
+def current_stage() -> str:
+    """The pipeline stage in flight, for events raised deep in the call tree."""
+    return _stage.get()
+
+
+@contextmanager
+def watching(job_id: str) -> Iterator[None]:
+    """Bind a job id to this task for the duration of its generation."""
+    token = _job.set(str(job_id))
+    stage_token = _stage.set("queued")
+    try:
+        yield
+    finally:
+        _job.reset(token)
+        _stage.reset(stage_token)
+
+
+def set_stage(stage: str) -> None:
+    """Record which stage is running, so a model call can name where it came from."""
+    _stage.set(stage)
+
+
+def publish_llm_call(
+    *,
+    model: str,
+    max_tokens: int,
+    system_prompt: str,
+    user_prompt: str,
+    response: str,
+    stop_reason: str | None,
+    elapsed_ms: int | None = None,
+    stage: str | None = None,
+) -> Event | None:
+    """Put one model call on the job's feed, prompts and all. No-op off the API.
+
+    Nothing is shortened here. A prompt clipped to fit a buffer is a prompt you
+    cannot paste back into the code that sent it, which would make the whole
+    feature decorative; the ring's byte budget is what keeps that safe, and the
+    `debug` level is what keeps it out of a normal watcher's stream.
+    """
+    job_id = _job.get()
+    if not job_id:
+        return None
+    where = stage or _stage.get() or "crew"
+    chars_in = len(system_prompt) + len(user_prompt)
+    summary = (
+        f"{model} · {where} · {chars_in:,} chars in, {len(response):,} out"
+        f" · stop {stop_reason or '—'}"
+    )
+    return publish(job_id, "llm", summary, level="debug", data={
+        "kind": "llm_call",
+        "pipeline_stage": where,
+        "model": model,
+        "max_tokens": max_tokens,
+        "stop_reason": stop_reason,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "response": response,
+        "elapsed_ms": elapsed_ms,
+    })
 
 
 def crew_sink(job_id: str) -> Callable[[str, str, str, dict[str, Any]], None]:

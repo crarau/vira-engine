@@ -91,6 +91,26 @@ stage that calls a model, route it through `vira.llm` so it is captured.
 - **PostgREST caps responses at 1000 rows** regardless of `limit`. Use
   `Supa.select_all`, which pages.
 
+## Public by design — do not add auth
+
+`https://vira.ideaplaces.com` and `https://console.ideaplaces.com` are open on
+purpose. This is a hackathon: the team, the judges and anyone we hand the link
+to should be able to hit it without a credential. **Do not add authentication,
+rate limiting or an allowlist unless explicitly asked** — "the API has no auth"
+is a decision, not an oversight, and flagging it every session wastes time.
+
+What that does mean:
+
+- `POST /v1/videos` spends real money on every call (Gemini, ElevenLabs,
+  Anthropic, Azure). Share the URL with people, not in public places.
+- Everything under `out/` is world-readable via `/media`, **including
+  `RECIPE.md` and `recipe.json` with verbatim prompts**. Never write anything
+  secret there.
+- Secrets live in Azure Key Vault `kv-zerohuman-hack` and reach the box in a
+  `chmod 600` env file. They never go through git and never into `out/`.
+
+Revisit only when this stops being a hackathon.
+
 ## The API is live — publish every stable change
 
 `https://vira.ideaplaces.com` is a public URL that other people (and Lovable)

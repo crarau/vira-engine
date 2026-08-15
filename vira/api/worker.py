@@ -179,6 +179,10 @@ async def _note(job_id: str, note: str, stage: str = "crew", **data: Any) -> Non
     stays backwards compatible with a call that has nothing better to say.
     """
     log.info("[%s] %s", job_id, note)
+    # Also the point at which the ambient stage moves, so a prompt published
+    # from four frames down the stack knows it belongs to "write" and not to
+    # whatever ran last.
+    events.set_stage(stage)
     events.publish(job_id, stage, note, data=data)
     await store.update_job_status(job_id, "running", progress_note=note)
 
@@ -367,38 +371,45 @@ async def run_job(
     job_id: str, *, company_slug: str, product: str, lane_name: str, mode: str,
     notes: list[str] | None = None, source_video_id: str | None = None,
 ) -> None:
-    """One job, start to finish. Never raises — failure lands on the job row."""
+    """One job, start to finish. Never raises — failure lands on the job row.
+
+    The whole run is bound to the job id here, not inside `_produce`: a failure
+    published from the `except` clauses below is as much part of this job's feed
+    as a progress note, and so is anything a cleanup path decides to say.
+    """
     async with _job_slots:
-        try:
-            lane = steer(get_lane(lane_name), notes)
-        except KeyError:
-            await _fail(job_id, f"unknown lane {lane_name!r}")
-            return
-        try:
-            video = await _produce(
-                job_id, company_slug, product, lane, mode, notes, source_video_id
-            )
-            # The job row carries no video id; get_job joins the videos it
-            # produced. Nothing to write back here beyond the terminal state.
-            hook = str(video.get("hook") or "")
-            await store.update_job_status(
-                job_id, "done", progress_note=f"done · {hook[:80]}"
-            )
-            # The terminal event closes every open stream, and carries the id a
-            # watcher needs to fetch the video without a second round trip.
-            events.publish(job_id, "done", f"done · {hook[:80]}", data={
-                "video_id": str(video.get("id") or ""),
-                "hook": hook,
-                "mp4_path": video.get("mp4_path"),
-                "score": video.get("score"),
-                "disposition": video.get("disposition"),
-            })
-        except JobFailed as exc:
-            log.warning("[%s] %s", job_id, exc)
-            await _fail(job_id, str(exc))
-        except Exception as exc:  # noqa: BLE001 - a dead job must still be reportable
-            log.exception("[%s] generation crashed", job_id)
-            await _fail(job_id, f"{type(exc).__name__}: {exc}")
+        with events.watching(job_id):
+            try:
+                lane = steer(get_lane(lane_name), notes)
+            except KeyError:
+                await _fail(job_id, f"unknown lane {lane_name!r}")
+                return
+            try:
+                video = await _produce(
+                    job_id, company_slug, product, lane, mode, notes, source_video_id
+                )
+                # The job row carries no video id; get_job joins the videos it
+                # produced. Nothing to write back here beyond the terminal state.
+                hook = str(video.get("hook") or "")
+                await store.update_job_status(
+                    job_id, "done", progress_note=f"done · {hook[:80]}"
+                )
+                # The terminal event closes every open stream, and carries the
+                # id a watcher needs to fetch the video without a second round
+                # trip.
+                events.publish(job_id, "done", f"done · {hook[:80]}", data={
+                    "video_id": str(video.get("id") or ""),
+                    "hook": hook,
+                    "mp4_path": video.get("mp4_path"),
+                    "score": video.get("score"),
+                    "disposition": video.get("disposition"),
+                })
+            except JobFailed as exc:
+                log.warning("[%s] %s", job_id, exc)
+                await _fail(job_id, str(exc))
+            except Exception as exc:  # noqa: BLE001 - a dead job must still be reportable
+                log.exception("[%s] generation crashed", job_id)
+                await _fail(job_id, f"{type(exc).__name__}: {exc}")
 
 
 async def _fail(job_id: str, error: str) -> None:

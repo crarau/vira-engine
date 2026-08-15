@@ -322,6 +322,7 @@ async def create_video(
             {
                 "video_id": video_id,
                 "n": call.get("n") or i + 1,
+                "stage": call.get("stage") or "",
                 "model": call.get("model") or "",
                 "max_tokens": call.get("max_tokens"),
                 "stop_reason": call.get("stop_reason"),
@@ -336,10 +337,10 @@ async def create_video(
                 text(
                     """
                     INSERT INTO llm_calls (
-                        video_id, n, model, max_tokens, stop_reason,
+                        video_id, n, stage, model, max_tokens, stop_reason,
                         system_prompt, user_prompt, response
                     ) VALUES (
-                        :video_id, :n, :model, :max_tokens, :stop_reason,
+                        :video_id, :n, :stage, :model, :max_tokens, :stop_reason,
                         :system_prompt, :user_prompt, :response
                     )
                     """
@@ -426,7 +427,8 @@ async def get_recipe(video_id: str | uuid.UUID) -> dict | None:
             return None
         recipe["llm_calls"] = _rows(await conn.execute(
             text(
-                "SELECT n, model, max_tokens, stop_reason, system_prompt, user_prompt, response "
+                "SELECT n, stage, model, max_tokens, stop_reason, "
+                "system_prompt, user_prompt, response "
                 "FROM llm_calls WHERE video_id = :video_id ORDER BY n"
             ),
             params,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 from vira.config import settings
 
@@ -27,25 +28,60 @@ async def complete(
     if not s.anthropic_api_key:
         raise LLMError("ANTHROPIC_API_KEY is not set")
     client = AsyncAnthropic(api_key=s.anthropic_api_key)
+    started = time.monotonic()
     msg = await client.messages.create(
         model=s.llm_model,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
     text = "".join(b.text for b in msg.content if b.type == "text")
 
-    # Capture prompts verbatim so any generated video can be traced back and
-    # tweaked. No-op when no Recorder is active.
+    # Two destinations, and they are not the same thing. The Recorder is the
+    # durable record — it lands in the recipe next to the mp4 and outlives the
+    # process. The event bus is the live one, for someone watching the run
+    # happen. Both are no-ops when nothing is listening, which is what keeps
+    # `variants.py` and `agentic_video.py` unchanged.
     from vira.provenance import current
 
+    stage = _publish(
+        system=system or "", prompt=prompt, model=s.llm_model,
+        max_tokens=max_tokens, response=text, stop_reason=msg.stop_reason,
+        elapsed_ms=elapsed_ms,
+    )
     if rec := current():
         rec.capture(
             system=system or "", prompt=prompt, model=s.llm_model,
             max_tokens=max_tokens, response=text, stop_reason=msg.stop_reason,
+            stage=stage,
         )
 
     return text, msg.stop_reason
+
+
+def _publish(
+    *, system: str, prompt: str, model: str, max_tokens: int,
+    response: str, stop_reason: str | None, elapsed_ms: int,
+) -> str:
+    """Announce the call on the live job feed, and report which stage it was in.
+
+    Imported lazily and defensively: this module is the CLI's LLM wrapper and it
+    must not acquire an import-time dependency on the REST service, nor fail a
+    generation because a progress feed did.
+    """
+    try:
+        from vira.api import events
+
+        events.publish_llm_call(
+            model=model, max_tokens=max_tokens, system_prompt=system,
+            user_prompt=prompt, response=response, stop_reason=stop_reason,
+            elapsed_ms=elapsed_ms,
+        )
+        return events.current_stage()
+    except Exception:  # noqa: BLE001 - a trace line cannot cost a paid generation
+        log.debug("could not publish the prompt for this call", exc_info=True)
+        return ""
 
 
 def _extract(raw: str) -> str:

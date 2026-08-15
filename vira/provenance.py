@@ -69,12 +69,19 @@ class Recorder:
 
     def capture(
         self, *, system: str, prompt: str, model: str, max_tokens: int,
-        response: str, stop_reason: str | None,
+        response: str, stop_reason: str | None, stage: str = "",
     ) -> None:
-        """Called by vira.llm on every completion. Stores prompts verbatim."""
+        """Called by vira.llm on every completion. Stores prompts verbatim.
+
+        `stage` is which part of the pipeline made the call ("plan", "write",
+        "score"). Optional, and empty from the CLI, where nothing tracks it —
+        the prompt is the record and the stage is only there to save a reader
+        matching a system prompt against the module that wrote it.
+        """
         self.calls.append({
             "n": len(self.calls) + 1,
             "at": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
             "model": model,
             "max_tokens": max_tokens,
             "stop_reason": stop_reason,
@@ -168,7 +175,8 @@ def _markdown(r: dict) -> str:
     L += ["", "## Prompts, verbatim", "",
           "These are the exact strings sent to the model. To change the ad, change these.", ""]
     for call in r["llm_calls"]:
-        L += [f"### Call {call['n']} — {call['model']} (max_tokens={call['max_tokens']}, stop={call['stop_reason']})",
+        where = f" · {call['stage']}" if call.get("stage") else ""
+        L += [f"### Call {call['n']}{where} — {call['model']} (max_tokens={call['max_tokens']}, stop={call['stop_reason']})",
               "", "**System**", "", "```text", call["system_prompt"], "```", "",
               "**User**", "", "```text", call["user_prompt"], "```", "",
               "<details><summary>Response</summary>", "", "```json", call["response"], "```", "", "</details>", ""]

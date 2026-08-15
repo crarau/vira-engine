@@ -59,6 +59,57 @@ def _silent(stage: str, message: str, level: str, data: dict[str, Any]) -> None:
     """Default event sink. The CLI has a terminal; nobody else is listening."""
 
 
+def _record_turn(
+    p: "Production", *, turn: int, messages: list[dict], reply: Any,
+    model: str, elapsed_ms: int, stop_reason: str | None,
+) -> None:
+    """Put one Director turn where the rest of the pipeline's prompts already go.
+
+    The Director talks to Azure directly rather than through `vira.llm`, because
+    it needs tool calling and a conversation and that wrapper offers neither. It
+    was therefore the one model in the system whose prompts reached no recipe and
+    no feed — which is backwards, since its instructions are the single string
+    that most decides what the film becomes.
+
+    `user_prompt` is the whole conversation minus the system message because
+    that is literally what was sent: a turn's input is every message so far, not
+    the last one.
+    """
+    calls = [
+        {"name": t.function.name, "arguments": t.function.arguments}
+        for t in (reply.tool_calls or [])
+    ]
+    response = json.dumps(
+        {"content": reply.content, "tool_calls": calls}, indent=2, default=str
+    )
+    conversation = json.dumps(messages[1:], indent=2, default=str)
+
+    from vira.provenance import current
+
+    if rec := current():
+        rec.capture(
+            system=DIRECTOR_INSTRUCTIONS, prompt=conversation, model=model,
+            max_tokens=0, response=response, stop_reason=stop_reason,
+            stage=f"director:turn{turn}",
+        )
+    p.emit(
+        "llm",
+        f"{model} · director turn {turn} · {len(conversation):,} chars in, "
+        f"{len(calls)} tool call(s) out",
+        "debug",
+        kind="llm_call",
+        pipeline_stage="director",
+        turn=turn,
+        model=model,
+        max_tokens=0,
+        stop_reason=stop_reason,
+        system_prompt=DIRECTOR_INSTRUCTIONS,
+        user_prompt=conversation,
+        response=response,
+        elapsed_ms=elapsed_ms,
+    )
+
+
 @dataclass
 class Production:
     """Everything the crew is working on. Tools read and mutate this."""
@@ -385,10 +436,16 @@ async def direct(p: Production) -> str:
                 f"BUDGET: {left} turns and {int(WALL_CLOCK_BUDGET_S - elapsed)}s left. "
                 "Stop polishing. Ensure imagery and voice have run, then reply DONE."})
 
+        turn_started = time.monotonic()
         resp = await client.chat.completions.create(
             model=s.agent_model, messages=messages, tools=tools,
         )
         msg = resp.choices[0].message
+        _record_turn(
+            p, turn=turn + 1, messages=messages, reply=msg, model=s.agent_model,
+            elapsed_ms=int((time.monotonic() - turn_started) * 1000),
+            stop_reason=resp.choices[0].finish_reason,
+        )
         messages.append({
             "role": "assistant",
             "content": msg.content,
@@ -423,12 +480,20 @@ async def direct(p: Production) -> str:
                 sentence = template.format(**args)
             except (KeyError, IndexError, ValueError):
                 sentence = template
-            p.emit("tool", sentence, "info", tool=name, turn=turn + 1, args=args)
+            p.emit("tool", sentence, "info", kind="tool_call", tool=name,
+                   turn=turn + 1, args=args,
+                   arguments=call.function.arguments or "{}")
             try:
-                return call.id, str(await fn(p, args)) if fn else (call.id, f"unknown tool {name}")
+                result = str(await fn(p, args)) if fn else f"unknown tool {name}"
             except Exception as exc:  # noqa: BLE001 - a tool failure is information
                 p.note(f"{name} failed: {exc}", "crew", level="error", tool=name)
                 return call.id, f"ERROR: {exc}"
+            # What the specialist handed back, whole. The Director's next turn
+            # is decided by this string and nothing else, so a reader trying to
+            # explain a decision needs it verbatim rather than summarised.
+            p.emit("tool", f"{name} returned {len(result):,} chars", "debug",
+                   kind="tool_result", tool=name, turn=turn + 1, result=result)
+            return call.id, result
 
         results = await asyncio.gather(
             *(run_call(c) for c in msg.tool_calls), return_exceptions=True

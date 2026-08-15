@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     video_id       uuid NOT NULL REFERENCES videos (id) ON DELETE CASCADE,
     n              int NOT NULL,
+    stage          text NOT NULL DEFAULT '',
     model          text NOT NULL DEFAULT '',
     max_tokens     int,
     stop_reason    text,
@@ -168,8 +169,16 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
+-- Additive, so it stays in this file rather than becoming a numbered migration
+-- init_db() would never read: the CREATE above covers a fresh database and this
+-- covers one created before verbose mode. Neither drops nor rewrites anything.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS stage text NOT NULL DEFAULT '';
+
 COMMENT ON COLUMN llm_calls.n IS
     'Call order within the video, 1-based, as recorded by vira.provenance.';
+COMMENT ON COLUMN llm_calls.stage IS
+    'Pipeline stage that made the call — plan, write, critique, score. Empty '
+    'for a CLI run, which tracks no stage.';
 
 -- Every read of this table is "all calls for one video, in order".
 CREATE INDEX IF NOT EXISTS llm_calls_video_n_idx ON llm_calls (video_id, n);

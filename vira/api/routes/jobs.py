@@ -104,6 +104,11 @@ async def get_job(job_id: str) -> JobOut:
 async def get_job_events(
     job_id: str,
     after: int = Query(0, ge=0, description="return only events with seq greater than this"),
+    level: str = Query(
+        events.DEFAULT_LEVEL,
+        description="minimum level: debug · info · warn · error. debug carries "
+                    "whole prompts and is excluded unless asked for.",
+    ),
 ) -> EventsOut:
     """The buffered trace as JSON, for a client that cannot use SSE.
 
@@ -112,6 +117,12 @@ async def get_job_events(
     row every worker shares and synthesises one event from it. A client polling
     this always learns that the job finished and what it produced; on the wrong
     worker it learns it in one sentence instead of thirty.
+
+    `?level=debug` adds the verbatim prompt of every model call. It is opt-in
+    because those payloads are kilobytes each and a normal poller wants a trace,
+    not a transcript. Sequence numbers are shared across levels, so a client
+    that switches level mid-run sees a gap in `seq` rather than renumbered
+    events — the gap is the events it chose not to receive.
     """
     row = await store.get_job(job_id)
     if not row:
@@ -119,7 +130,9 @@ async def get_job_events(
     status = str(row.get("status") or "queued")
 
     if events.bus.known(job_id):
-        buffered = events.bus.history(job_id, after_seq=after or None)
+        buffered = events.bus.history(
+            job_id, after_seq=after or None, level=events.normalise_level(level)
+        )
         last = buffered[-1].seq if buffered else after
         return EventsOut(
             job_id=job_id,
@@ -156,6 +169,11 @@ async def stream_job(
         default=None,
         description="resume point for clients that cannot set Last-Event-ID",
     ),
+    level: str = Query(
+        events.DEFAULT_LEVEL,
+        description="minimum level: debug · info · warn · error. debug is the "
+                    "verbose feed — every prompt, verbatim.",
+    ),
 ) -> StreamingResponse:
     """Live trace over Server-Sent Events, ending in `done` or `failed`.
 
@@ -163,6 +181,11 @@ async def stream_job(
     `id: <seq>`, and on an automatic reconnect `EventSource` sends the last one
     back as `Last-Event-ID`. `?after=` is the same thing for a client that is
     not a browser, since `EventSource` cannot set a header.
+
+    `?level=debug` opens the verbose feed. It is a different subscription rather
+    than a client-side filter, so a watcher on the default feed never pays for
+    the prompts — and a verbose watcher gets the replay at its own level too,
+    which is what makes turning it on mid-run show the calls already made.
     """
     row = await store.get_job(job_id)
     if not row:
@@ -173,7 +196,7 @@ async def stream_job(
         resume = after
 
     return StreamingResponse(
-        _frames(job_id, row, resume, request),
+        _frames(job_id, row, resume, events.normalise_level(level), request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
@@ -226,14 +249,14 @@ def _from_job_row(job_id: str, row: dict[str, Any]) -> events.Event:
 
 
 async def _frames(
-    job_id: str, row: dict[str, Any], resume: int | None, request: Request
+    job_id: str, row: dict[str, Any], resume: int | None, level: str, request: Request
 ) -> AsyncIterator[str]:
     """The byte stream. Live from the bus when this process owns the job, polled
     from the job row when it does not."""
-    yield f"retry: {RETRY_MS}\n: watching {job_id}\n\n"
+    yield f"retry: {RETRY_MS}\n: watching {job_id} at {level}\n\n"
     try:
         if events.bus.known(job_id):
-            async for frame in _live(job_id, resume, request):
+            async for frame in _live(job_id, resume, level, request):
                 yield frame
         else:
             async for frame in _polled(job_id, row, resume, request):
@@ -246,9 +269,11 @@ async def _frames(
         yield ": stream error — reconnect\n\n"
 
 
-async def _live(job_id: str, resume: int | None, request: Request) -> AsyncIterator[str]:
+async def _live(
+    job_id: str, resume: int | None, level: str, request: Request
+) -> AsyncIterator[str]:
     deadline = time.monotonic() + STREAM_MAX_S
-    async with events.bus.subscribe(job_id, after_seq=resume) as q:
+    async with events.bus.subscribe(job_id, after_seq=resume, level=level) as q:
         while time.monotonic() < deadline:
             try:
                 event = await asyncio.wait_for(q.get(), timeout=HEARTBEAT_S)
