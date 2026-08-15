@@ -305,3 +305,103 @@ async def test_the_crew_default_sink_keeps_the_cli_unchanged():
     p.note("script written: 6 beats", "write", beats=6)
 
     assert p.log == ["script written: 6 beats"]
+
+
+# -- verbose mode -----------------------------------------------------------
+#
+# Prompts on the feed are the reason the level filter exists. Each of these
+# guards one half of the trade: the transcript must arrive whole for someone who
+# asked for it, and must not arrive at all for someone who did not.
+
+
+PROMPT = "You are a sceptical grader.\n" + ("x" * 20_000) + "\nScore it."
+
+
+def llm_event(bus_, job=JOB, **kw):
+    payload = {
+        "kind": "llm_call", "model": "claude-sonnet-5", "max_tokens": 4000,
+        "stop_reason": "end_turn", "system_prompt": PROMPT,
+        "user_prompt": "Write the ad.", "response": "{}",
+    }
+    payload.update(kw)
+    return bus_.publish(job, "llm", "one model call", level="debug", data=payload)
+
+
+async def test_debug_is_excluded_from_the_default_feed(bus):
+    bus.publish(JOB, "write", "writing 6 beats")
+    llm_event(bus)
+    bus.publish(JOB, "score", "scoring")
+
+    assert messages(bus.history(JOB)) == ["writing 6 beats", "scoring"]
+    assert len(bus.history(JOB, level="debug")) == 3
+
+
+async def test_a_default_subscriber_never_receives_a_prompt(bus):
+    """Filtered at the bus, not in the browser — the payload is never queued."""
+    async with bus.subscribe(JOB) as plain, bus.subscribe(JOB, level="debug") as verbose:
+        llm_event(bus)
+        bus.publish(JOB, "done", "done")
+
+    assert messages(await drain(plain)) == ["done"]
+    assert messages(await drain(verbose)) == ["one model call", "done"]
+
+
+async def test_turning_verbose_on_late_replays_the_calls_already_made(bus):
+    llm_event(bus)
+    bus.publish(JOB, "write", "writing 6 beats")
+
+    async with bus.subscribe(JOB, level="debug") as q:
+        assert messages(await drain(q)) == ["one model call", "writing 6 beats"]
+
+
+async def test_a_prompt_event_round_trips_its_full_text(bus):
+    """Nothing is truncated server-side, including through the SSE frame."""
+    event = llm_event(bus)
+
+    assert event is not None
+    assert event.data["system_prompt"] == PROMPT
+
+    replayed = bus.history(JOB, level="debug")[0]
+    assert replayed.data["system_prompt"] == PROMPT
+
+    payload = json.loads(replayed.sse().split("data: ", 1)[1])
+    assert payload["data"]["system_prompt"] == PROMPT
+    assert payload["level"] == "debug"
+
+
+async def test_an_unknown_level_asks_for_the_ordinary_feed():
+    from vira.api.events import normalise_level
+
+    assert normalise_level("debug") == "debug"
+    assert normalise_level("error") == "error"
+    assert normalise_level(None) == "info"
+    assert normalise_level("verbose") == "info"
+    assert normalise_level("DEBUG") == "info"
+
+
+async def test_the_byte_budget_evicts_before_the_count_does():
+    """400 events of 20 KB would be 8 MB per job. The ring is capped in bytes too."""
+    small = JobBus(ring_size=400, max_jobs=4, max_job_bytes=100_000)
+
+    for _ in range(20):
+        llm_event(small)
+
+    kept = small.history(JOB, level="debug")
+    assert len(kept) < 20                       # the count cap never fired
+    assert small.buffered_bytes(JOB) <= 100_000
+    assert kept[-1].data["system_prompt"] == PROMPT   # what survives is whole
+
+
+async def test_a_verbose_job_cannot_starve_the_whole_process():
+    """The process-wide ceiling drops the least recently active job, not a prompt."""
+    small = JobBus(ring_size=400, max_jobs=64, max_job_bytes=100_000,
+                   max_total_bytes=150_000)
+
+    for _ in range(6):
+        llm_event(small, job="job-a")
+    for _ in range(6):
+        llm_event(small, job="job-b")
+
+    assert small.known("job-a") is False
+    assert small.known("job-b") is True
+    assert small.buffered_bytes() <= 150_000

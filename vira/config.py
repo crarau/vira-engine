@@ -9,8 +9,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # --- Lovable Cloud (Supabase) ---------------------------------------
-    # Publishable key: public by design, RLS-bound. Committed by Lovable into
-    # company-essence-lab/.env, so it is not a secret we are leaking.
+    # Publishable key, and it stays in a public repo on purpose. It is
+    # RLS-bound, read-only, and Lovable itself commits it to the frontend repo
+    # and ships it in every browser bundle — that is what "publishable" means.
+    # The keys that DO matter (Gemini, ElevenLabs, Anthropic, Azure, Stripe,
+    # the agent password) have no defaults here and come from the environment.
+    # If this ever needs to change, rotate it in Lovable, not here.
     supabase_url: str = "https://otsqjpmsiysitpkqoejr.supabase.co"
     supabase_key: str = "sb_publishable_kJfcznb5ZUS99xf4ulBw7w_10R62tZs"
     # Agent account used for writes. Reads work without it.

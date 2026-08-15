@@ -219,3 +219,59 @@ async def test_it_gives_up_after_two_attempts_not_forever(anthropic_stub):
     with pytest.raises(LLMError):
         await complete_json("p", system="s")
     assert len(sent) == 2
+
+
+# --- the live feed ----------------------------------------------------------
+#
+# Verbose mode hangs off a context variable the API worker sets. The CLI never
+# sets it, and these two tests are the boundary: nothing published, nothing
+# imported, nothing changed for `variants.py` and `agentic_video.py`.
+
+
+VERBOSE_JOB = "9d8c7b6a-5555-4444-3333-222211110000"
+
+
+async def test_a_call_outside_a_job_publishes_nothing(anthropic_stub):
+    from vira.api import events
+
+    anthropic_stub(text_reply("the answer"))
+    assert events.current_job() is None
+
+    text, _ = await complete("the prompt", system="the system")
+
+    assert text == "the answer"
+    assert events.bus.known(VERBOSE_JOB) is False
+
+
+async def test_a_call_inside_a_job_puts_the_whole_prompt_on_the_feed(anthropic_stub):
+    from vira.api import events
+
+    prompt = "Write the ad.\n" + ("y" * 9_000)
+    anthropic_stub(text_reply("the answer"))
+    try:
+        with events.watching(VERBOSE_JOB):
+            events.set_stage("write")
+            await complete(prompt, system="the system", max_tokens=321)
+
+        # Not on the ordinary feed, and whole on the verbose one.
+        assert events.bus.history(VERBOSE_JOB) == []
+        (event,) = events.bus.history(VERBOSE_JOB, level="debug")
+        assert event.stage == "llm"
+        assert event.data["pipeline_stage"] == "write"
+        assert event.data["model"] == "claude-sonnet-5"
+        assert event.data["max_tokens"] == 321
+        assert event.data["stop_reason"] == "end_turn"
+        assert event.data["system_prompt"] == "the system"
+        assert event.data["user_prompt"] == prompt
+        assert event.data["response"] == "the answer"
+    finally:
+        events.bus.forget(VERBOSE_JOB)
+
+
+async def test_the_job_binding_does_not_outlive_its_block(anthropic_stub):
+    from vira.api import events
+
+    with events.watching(VERBOSE_JOB):
+        assert events.current_job() == VERBOSE_JOB
+    assert events.current_job() is None
+    assert events.current_stage() == ""
