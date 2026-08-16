@@ -1,0 +1,9 @@
+Scaling Vira with $1M
+=====================
+
+The corpus is the moat, so most of the money goes into widening it — more
+categories, more platforms, and a conversion feedback loop that records which
+generated ads actually sold rather than which source videos merely performed.
+That turns the evidence gate from a fixed threshold into something that gets
+stricter with every ad shipped, which is the only version of this business that
+compounds instead of just scaling headcount-free.
