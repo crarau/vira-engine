@@ -59,6 +59,8 @@ GET  /healthz
 GET  /v1/lanes                              creative angles a UI can offer
 GET  /v1/companies          POST /v1/companies
 POST /v1/videos                             → 202 {job_id}
+POST /v1/briefs                             the Lovable brief · same 202 · docs/BRIEFS.md
+POST /v1/ads/image                          a static ad, inline · docs/IMAGE-API.md §2
 GET  /v1/jobs/{job_id}                      status, progress, video_id when done
 GET  /v1/jobs/{job_id}/stream               SSE · the live trace, as it happens
 GET  /v1/jobs/{job_id}/events               the same trace as JSON, for pollers
@@ -367,10 +369,13 @@ where they get quietly dropped:
 
 ## Open
 
-- **Auth.** Currently none. Fine while the only caller is a demo frontend and
-  the judge tokens are unguessable. Before anything real: an API key on the
-  write endpoints, and rate limiting on `POST /v1/videos`, which costs money
-  every time it is called.
+- **Auth.** Off by default, and that is still the decision. There is now an
+  opt-in: set `VIRA_ENGINE_TOKEN` on the server and the five endpoints that
+  start paid generation require `Authorization: Bearer <token>`. Unset, nothing
+  changes. The judge routes, `/healthz` and every GET are never gated — the
+  gated set is enumerated endpoint by endpoint rather than derived from the HTTP
+  method, precisely so a panellist with no credential cannot be locked out. See
+  `docs/BRIEFS.md` §8. Rate limiting on `POST /v1/videos` is still open.
 - **Media hosting.** mp4s are served off local disk. That is correct on chipdev
   and wrong on Render, whose disks are ephemeral — object storage is needed
   there.

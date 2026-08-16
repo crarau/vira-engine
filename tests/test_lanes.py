@@ -54,6 +54,20 @@ def test_performance_tags_are_well_formed(lane):
         assert TAG.match(tag), f"{lane.name}: {tag!r} is not a performance tag"
 
 
+# Tags that are a sound rather than a mood. Measured (docs/VOICE.md) at a
+# further 12% on inter-word-gap variation over a palette of moods alone, against
+# a 3% noise floor — the cheapest humanising device in the system.
+NON_VERBAL = {"[sighs]", "[exhales]", "[inhales]", "[laughs]", "[scoffs]",
+              "[breathes]", "[gasps]", "[chuckles]"}
+
+
+@pytest.mark.parametrize("lane", LANES, ids=[lane.name for lane in LANES])
+def test_every_lane_can_breathe(lane):
+    """A palette of pure moods gets a read. A breath is what gets a person."""
+    palette = {lane.opening, lane.closing, *lane.middle}
+    assert palette & NON_VERBAL, f"{lane.name} has no non-verbal tag"
+
+
 def test_lanes_are_immutable():
     """Five variants build in parallel off the same Lane objects; a mutable lane
     would let one variant's steer leak into another's."""

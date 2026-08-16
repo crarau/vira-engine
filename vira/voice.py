@@ -3,10 +3,21 @@
 Two jobs:
 
 1. **Performance.** A flat read makes a great script sound like a subtitle.
-   `eleven_v3` accepts inline audio tags — `[excited]`, `[shouting]`,
-   `[whispers]` — which are performance direction, not spoken words. The hook
-   gets attacked, the middle breathes, the CTA gets shouted. That is the whole
-   Billy Mays trick: dynamic range, not volume.
+   `eleven_v3` accepts inline audio tags — `[excited]`, `[sighs]`, `[whispers]`
+   — which are performance direction, not spoken words.
+
+   What they actually do is narrower than it looks, and it was worth measuring
+   (docs/VOICE.md, 3 runs per condition against the live API). Tags move
+   **phrasing**: they more than double the variation in gaps between words and
+   take the count of >300 ms pauses from 1 to 7 across a 30-second read. They do
+   **not** move loudness — the spread across voiced frames is identical with and
+   without them. So the "dynamic range" framing was wrong: tags buy breathing
+   and hesitation, which is what actually reads as a person.
+
+   Loudness and word stress come from the **orthography of the copy** instead —
+   a word in CAPS and an em-dash aside widen word-stress variation by 16% and
+   loudness range by 1.4 dB on identical wording. That fix lives in the writing
+   (`remix.py`), not here. Ellipses do nothing; they produce no pause.
 
 2. **Timing.** Character timestamps come back in the same call, and every frame
    offset downstream is computed from them. Nothing is hand-timed.
@@ -36,9 +47,12 @@ TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamp
 
 # Performance direction per beat position. The shape matters more than the
 # individual tags: hit hard, pull back, build, then hit hardest at the CTA.
+# [exhales] earns its slot in the middle — a non-verbal is what buys the pause
+# variation that reads as somebody talking rather than reading.
 OPENING = "[excited]"
 CLOSING = "[shouting]"
-MIDDLE = ["[confident]", "[curious]", "[serious]", "[excited]", "[confident]"]
+MIDDLE = ["[confident]", "[curious]", "[exhales]", "[serious]", "[excited]",
+          "[confident]"]
 
 _TAG = re.compile(r"\[[^\]]*\]")
 
@@ -88,10 +102,15 @@ async def synthesize(remix: Remix, out_dir: Path, lane=None) -> tuple[Path, floa
 
     body: dict = {"text": text, "model_id": s.elevenlabs_model}
     if s.elevenlabs_model == "eleven_v3":
-        # v3 reads stability as a creativity dial, not a consistency one.
-        # 0.0 = "Creative": it actually acts on the performance tags. Measured
-        # 25% more dynamic range than 1.0 on the same line — which is the whole
-        # difference between a read and a performance.
+        # Kept at 0.0, but not for the reason previously written here. Re-measured
+        # over 3 runs per setting on the same script (docs/VOICE.md): stability
+        # 0.0 / 0.5 / 1.0 differ by less than the run-to-run noise on loudness
+        # spread and pause variability. The earlier "25% more dynamic range"
+        # claim does not reproduce. 0.0 holds a marginal edge on word-duration
+        # variation and costs nothing, so it stays — as a default, not a lever.
+        #
+        # `speed` is NOT sent: v3 accepts the field and silently ignores it.
+        # 0.7 / 1.0 / 1.2 all returned the same duration within noise.
         body["voice_settings"] = {"stability": s.voice_stability_v3}
     elif s.elevenlabs_model == "eleven_multilingual_v2":
         # Only v2 exposes these. Low stability = wide emotional range, which is

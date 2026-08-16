@@ -40,6 +40,8 @@ from typing import Any
 from vira.agentic.crew import Production, direct
 from vira.analyze import analyze_corpus
 from vira.api import events, store
+from vira import brief as briefs
+from vira.brief import Brief
 from vira.config import settings
 from vira.director import critique, plan as make_plan, revise
 from vira.lanes import Lane, get as get_lane
@@ -84,6 +86,15 @@ class JobFailed(RuntimeError):
 def media_url(base_url: str, media_path: str) -> str:
     """Absolute URL for a rendered file, for a frontend on another origin."""
     return f"{base_url.rstrip('/')}/media/{media_path.lstrip('/')}"
+
+
+def render_slot() -> asyncio.Semaphore:
+    """The machine's Remotion bound, shared with every other caller.
+
+    A static ad renders through Remotion too (`vira.adimage`), and two bounds
+    would not be a bound — the CPU does not care which endpoint asked.
+    """
+    return _render_slots
 
 
 def spawn(job_id: str, **kwargs: Any) -> None:
@@ -158,6 +169,15 @@ def _new_out_dir(slug: str, lane_name: str, mode: str) -> Path:
     return out_dir
 
 
+def new_out_dir(slug: str, lane_name: str, mode: str) -> Path:
+    """The versioned output dir, for callers outside this module.
+
+    A static ad lands in the same tree under the same convention (`vira.adimage`)
+    so `/media` serves both and nothing has to learn a second layout.
+    """
+    return _new_out_dir(slug, lane_name, mode)
+
+
 def _relocate_shots(shots: list[dict], src: Path, dest: Path) -> list[dict]:
     """Move crew-generated frames into this job's slot under public/shots.
 
@@ -194,16 +214,31 @@ async def _note(job_id: str, note: str, stage: str = "crew", **data: Any) -> Non
 async def _fast(
     job_id: str, rec: Recorder, company: Company, product: str,
     picked: list[Trend], corpus: CorpusAnalysis, lane: Lane,
-    out_dir: Path, shots_dir: Path,
+    out_dir: Path, shots_dir: Path, plan_override=None, brief: Brief | None = None,
 ) -> tuple[Remix, list[dict], Path, float]:
-    """plan → write → critique → revise → (voice ‖ imagery). ~74s."""
+    """plan → write → critique → revise → (voice ‖ imagery). ~74s.
+
+    `plan_override` skips the director. A brief that states its own duration and
+    beat list has already made the decisions the director would make, and asking
+    a model to re-derive them would only give it the chance to disagree.
+
+    `brief` is here for one reason: its clock has to be enforced BEFORE voice and
+    imagery. Narration is what fixes every timing in the film, so a script cut
+    after it has been synthesised is a shorter caption track over a longer read —
+    and eight frames drawn for beats that no longer exist.
+    """
     steered = Company(**{
         **company.model_dump(),
         "mission": f"{company.mission}\n\nCREATIVE DIRECTION FOR THIS AD: {lane.brief}",
     })
 
-    await _note(job_id, f"planning the {lane.name} cut", "plan", lane=lane.name)
-    vp = await make_plan(company, product, lane.brief, corpus)
+    if plan_override is not None:
+        vp = plan_override
+        await _note(job_id, f"executing the brief's shape · {vp.beat_count} beats "
+                    f"in {vp.target_seconds}s", "plan", lane=lane.name, from_brief=True)
+    else:
+        await _note(job_id, f"planning the {lane.name} cut", "plan", lane=lane.name)
+        vp = await make_plan(company, product, lane.brief, corpus)
     rec.note("plan", vp.model_dump())
 
     await _note(job_id, f"writing {vp.beat_count} beats over {vp.target_seconds}s",
@@ -215,6 +250,17 @@ async def _fast(
     rec.note("critique", crit.model_dump())
     if crit.notes:
         remix = await revise(remix, crit, picked)
+
+    # `durationSeconds` reaches the writer as an instruction, and instructions
+    # get missed — a 4-second brief measured 23-27 words against a 10-word budget
+    # however hard the prompt states it. One cutting pass, then whatever is left
+    # over is published rather than left for the caller to find on playback.
+    if brief is not None and (miss := briefs.budget_miss(brief, remix)):
+        await _note(job_id, f"over the brief's clock, cutting · {miss}", "write")
+        remix = await briefs.compress(remix, brief, picked)
+        if still := briefs.budget_miss(brief, remix):
+            await _note(job_id, f"still over the brief's clock · {still}", "write")
+        rec.note("duration_overrun", still)
 
     # Voice and imagery both need the script and neither needs the other.
     await _note(job_id, "recording narration and generating frames", "voice")
@@ -263,15 +309,21 @@ async def _agentic(
 async def _produce(
     job_id: str, company_slug: str, product: str, lane: Lane, mode: str,
     notes: list[str] | None = None, source_video_id: str | None = None,
+    brief: Brief | None = None,
 ) -> dict:
     t0 = time.monotonic()
 
     await _note(job_id, "selecting candidate trends", "select")
     supa = Supa()
     row = await get_company(supa, company_slug)
-    if not row:
+    if brief is not None:
+        # The brief carries the brand, so a company Lovable has not registered
+        # here is not a failure — only a company with neither a brief nor a row.
+        company = briefs.company_from_brief(brief, row)
+    elif not row:
         raise JobFailed(f"no company with slug {company_slug!r}")
-    company = Company.from_row(row)
+    else:
+        company = Company.from_row(row)
 
     out_dir = _new_out_dir(company_slug, lane.name, mode)
     public = VIDEO_DIR / "public"
@@ -296,8 +348,25 @@ async def _produce(
         # in recipes.plan, so both fields survive.
         rec.note("revision_notes", notes or [])
         rec.note("regenerated_from_video_id", source_video_id)
+        rec.note(
+            # In their names, so the recorded brief can be posted straight back.
+            "brief", brief.model_dump(mode="json", by_alias=True) if brief else None,
+        )
 
-        picked, rejected = await shortlist(supa, company, product)
+        if brief is not None and brief.trend_refs:
+            # Better retrieval than selection has: Lovable picked these against
+            # the brand and the asset, not against a category. See vira/brief.py.
+            picked, rejected = await briefs.resolve_trend_refs(supa, brief)
+            await _note(job_id, f"grounding on {len(picked)} references the brief "
+                        "chose, skipping category selection", "select",
+                        sources=len(picked), from_brief=True)
+            if not picked:
+                raise JobFailed(
+                    "none of the brief's trend references exist in the corpus — "
+                    "nothing verifiable to ground on"
+                )
+        else:
+            picked, rejected = await shortlist(supa, company, product)
         await _note(job_id, f"verifying {len(picked)} source URLs", "verify",
                     sources=len(picked))
         picked, dead = await verify_all(picked)
@@ -310,14 +379,31 @@ async def _produce(
         rec.note("rejected_at_selection", rejected)
         rec.note("dead_urls", len(dead))
 
-        build = _agentic if mode == "agentic" else _fast
-        remix, shots, mp3, duration = await build(
-            job_id, rec, company, product, picked, corpus, lane, out_dir, shots_dir
-        )
+        if mode == "agentic":
+            # The Director owns its own shape, so a brief reaches it as creative
+            # direction (through the lane brief) rather than as a fixed plan.
+            remix, shots, mp3, duration = await _agentic(
+                job_id, rec, company, product, picked, corpus, lane, out_dir, shots_dir
+            )
+        else:
+            remix, shots, mp3, duration = await _fast(
+                job_id, rec, company, product, picked, corpus, lane, out_dir, shots_dir,
+                plan_override=briefs.plan_from_brief(brief) if brief else None,
+                brief=brief,
+            )
 
         # Deterministic, after the creative work, out of any agent's reach.
         await _note(job_id, "scoring against the cited sources", "score")
         score = await score_remix(company, product, remix, picked)
+        if brief is not None:
+            before = score.evidence
+            score = briefs.temper(score, brief)
+            if score.evidence < before:
+                await _note(
+                    job_id,
+                    "signal quality is low — evidence scored down before the gate",
+                    "score", evidence_before=before, evidence_after=score.evidence,
+                )
         dispo, reason = disposition(score)
 
         s = settings()
@@ -380,6 +466,7 @@ async def _produce(
 async def run_job(
     job_id: str, *, company_slug: str, product: str, lane_name: str, mode: str,
     notes: list[str] | None = None, source_video_id: str | None = None,
+    brief: Brief | None = None,
 ) -> None:
     """One job, start to finish. Never raises — failure lands on the job row.
 
@@ -394,9 +481,14 @@ async def run_job(
             except KeyError:
                 await _fail(job_id, f"unknown lane {lane_name!r}")
                 return
+            if brief is not None:
+                # The brief outranks the lane, so it is folded into it rather
+                # than carried alongside — every stage already reads the lane.
+                lane = briefs.lane_from_brief(lane, brief)
             try:
                 video = await _produce(
-                    job_id, company_slug, product, lane, mode, notes, source_video_id
+                    job_id, company_slug, product, lane, mode, notes, source_video_id,
+                    brief=brief,
                 )
                 # The job row carries no video id; get_job joins the videos it
                 # produced. Nothing to write back here beyond the terminal state.

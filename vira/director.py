@@ -35,7 +35,44 @@ class VideoPlan(BaseModel):
     pacing: str = ""             # "accelerating", "front-loaded", "slow burn"
     opening_move: str = ""       # what happens in the first 1.5 seconds
     turn_at: str = ""            # where it changes gear
+    hook_shape: str = ""         # the GRAMMAR of the first line, see HOOK_SHAPES
     rationale: str = ""
+
+
+# The measured-permitted opening classes, from docs/HOOK-CRAFT.md. The director
+# picks one per film. Without this every lane converges on the same grammar --
+# which is what "the hooks are samey" actually means: not a vocabulary problem,
+# an identical clause structure across all five variants.
+HOOK_SHAPES: dict[str, str] = {
+    "first-person-admission": (
+        "Open on 'I' plus a past-tense verb. A thing you did, believed or got "
+        "wrong. e.g. 'I gave up on X for two YEARS.'"
+    ),
+    "first-person-plural-claim": (
+        "Open on 'We' plus a present-tense verb. What the brand does or refuses "
+        "to do, stated flatly. e.g. 'We tested this on FORTY people first.'"
+    ),
+    "second-person-consequence": (
+        "'You' is the subject and something happens TO them. Not a command. "
+        "e.g. 'You have been reapplying this WRONG.'"
+    ),
+    "reported-speech": (
+        "Attribute the wrong belief to someone else, then stand against it. "
+        "e.g. 'My dermatologist told me to STOP using it.'"
+    ),
+    "counted-anchor": (
+        "One number as subject or object of a real verb -- never a bare "
+        "listicle label. e.g. 'I wore it for THIRTY days straight.'"
+    ),
+    "withheld-referent": (
+        "A finite clause whose object is deliberately unnamed, forcing the next "
+        "beat. e.g. 'I stopped buying the one thing everybody RECOMMENDS.'"
+    ),
+    "overheard-question": (
+        "A genuine question the viewer has been asked or has asked. Ends in '?'. "
+        "e.g. 'Have you actually READ what is in yours?'"
+    ),
+}
 
 
 class Critique(BaseModel):
@@ -60,6 +97,11 @@ slow burn. A social-proof cut wants many short ones, accelerating. Do NOT
 default to seven beats at thirty seconds — that is the safe average and it is
 why generated ads all feel the same.
 
+You also fix the GRAMMAR of the first line, by picking one hook shape from the
+list you are given. Pick the one that fits the angle, not the one that sounds
+best in isolation — the whole point is that five ads for one brand do not all
+open with the same clause structure.
+
 JSON only."""
 
 PLAN_PROMPT = """# Brand
@@ -74,6 +116,9 @@ Recurring hooks: {hooks}
 Top performers share: {shared}
 Nobody is doing: {whitespace}
 
+# Hook shapes you may choose from — these are the only permitted ones
+{hook_shapes}
+
 # Task
 Return JSON:
 {{
@@ -84,6 +129,7 @@ Return JSON:
   "pacing": "accelerating|front-loaded|slow burn|metronomic",
   "opening_move": "what happens in the first 1.5 seconds, before any pitch",
   "turn_at": "where and how the film changes gear",
+  "hook_shape": "exactly one key from the list above",
   "rationale": "why this shape suits this angle, under 200 chars"
 }}"""
 
@@ -95,7 +141,11 @@ punchier" is not.
 
 Judge: does the first line stop a scroll? Does any beat repeat another? Is the
 middle dead? Does the CTA earn itself? Does it sound like a person or like
-marketing? JSON only."""
+marketing?
+
+You are also handed a list of measured grammar faults in the hook. Those are not
+opinions — they come from 2,669 ranked TikToks. If the list is non-empty, the
+weakest beat is beat 1 and your first note must fix the hook. JSON only."""
 
 CRITIQUE_PROMPT = """# The ad
 Hook: {hook}
@@ -103,6 +153,8 @@ Hook: {hook}
 CTA: {cta}
 
 Plan it was meant to execute: {structure} · {device} · {pacing}
+Hook shape it was meant to take: {hook_shape}
+Measured hook faults: {hook_faults}
 
 # Task
 Return JSON:
@@ -118,7 +170,11 @@ REVISE_SYSTEM = """You revise an ad script against a critic's notes.
 
 Apply every note literally. Keep what works — do not rewrite lines the critic
 did not flag. Preserve the beat schema exactly, including motion, camera and
-delivery on every beat. JSON only."""
+delivery on every beat.
+
+If you touch the hook, the rewrite must still be a finite clause of 4-14 words
+containing I/we/you and exactly one CAPS word, and must not open on an
+imperative, a negation, a demonstrative or the brand name. JSON only."""
 
 REVISE_PROMPT = """# Current script
 {script}
@@ -151,6 +207,7 @@ async def plan(
             hooks="; ".join(corpus.recurring_hooks) or "unknown",
             shared=corpus.what_top_performers_share or "unknown",
             whitespace=corpus.whitespace or "unknown",
+            hook_shapes="\n".join(f"- {k}: {v}" for k, v in HOOK_SHAPES.items()),
         ),
         system=PLAN_SYSTEM,
         max_tokens=1200,
@@ -163,10 +220,16 @@ async def plan(
         pacing=str(data.get("pacing", "")),
         opening_move=str(data.get("opening_move", "")),
         turn_at=str(data.get("turn_at", "")),
+        # An invented shape is worse than none: the writer would be handed a
+        # constraint with no measured backing behind it.
+        hook_shape=(lambda s: s if s in HOOK_SHAPES else "")(
+            str(data.get("hook_shape", "")).strip()
+        ),
         rationale=str(data.get("rationale", "")),
     )
-    log.info("plan: %s · %s · %d beats / %ds · %s",
-             p.structure, p.device, p.beat_count, p.target_seconds, p.pacing)
+    log.info("plan: %s · %s · %d beats / %ds · %s · hook=%s",
+             p.structure, p.device, p.beat_count, p.target_seconds, p.pacing,
+             p.hook_shape or "unconstrained")
     return p
 
 
@@ -178,10 +241,15 @@ def _script_block(remix: Remix) -> str:
 
 
 async def critique(remix: Remix, p: VideoPlan) -> Critique:
+    from vira.remix import hook_faults
+
+    faults = hook_faults(remix.hook)
     data = await complete_json(
         CRITIQUE_PROMPT.format(
             hook=remix.hook, beats=_script_block(remix), cta=remix.cta,
             structure=p.structure, device=p.device, pacing=p.pacing,
+            hook_shape=p.hook_shape or "unconstrained",
+            hook_faults="; ".join(faults) if faults else "none",
         ),
         system=CRITIQUE_SYSTEM,
         max_tokens=1200,

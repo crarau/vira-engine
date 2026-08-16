@@ -42,8 +42,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from vira.api import auth
 from vira.api.db import init_db
-from vira.api.routes import image, corpus, companies, jobs, reviews, suggest, terac, videos
+from vira.api.routes import (
+    ads, briefs, image, corpus, companies, jobs, reviews, suggest, terac, videos,
+)
 from vira.api.worker import OUT_DIR
 
 log = logging.getLogger("vira.api")
@@ -70,6 +73,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Registered BEFORE CORS so CORS ends up the outer layer: Starlette runs the
+# last-added middleware first, and a 401 without Access-Control-Allow-Origin
+# reaches a browser as an unexplained network error. No-op unless
+# VIRA_ENGINE_TOKEN is set — see vira/api/auth.py.
+auth.install(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -90,8 +99,10 @@ app.mount("/media", StaticFiles(directory=OUT_DIR), name="media")
 
 app.include_router(corpus.router)
 app.include_router(image.router)
+app.include_router(ads.router)
 app.include_router(companies.router)
 app.include_router(videos.router)
+app.include_router(briefs.router)
 app.include_router(jobs.router)
 app.include_router(reviews.router)
 app.include_router(suggest.router)
@@ -120,6 +131,33 @@ async def malformed_id(request: Request, exc: ValueError) -> JSONResponse:
     """
     log.info("422 on %s: %s", request.url.path, exc)
     return JSONResponse(status_code=422, content={"detail": f"malformed identifier: {exc}"})
+
+
+@app.get("/", tags=["ops"])
+async def root() -> dict[str, object]:
+    """A signpost, because the bare hostname is the first thing anyone clicks.
+
+    This URL is in the README and on the submission form. Without this handler
+    it 404s, which reads as "the service is down" to someone who has never seen
+    it before — the worst possible first impression for a link we chose to
+    publish.
+    """
+    return {
+        "service": "vira-engine",
+        "what": (
+            "Turns the real TikToks already winning in a category into finished "
+            "video ads, and refuses to ship any it cannot ground in evidence."
+        ),
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+        "source": "https://github.com/crarau/vira-engine",
+        "start_here": {
+            "creative lanes": "/v1/lanes",
+            "what is in the corpus": "/v1/corpus/stats",
+            "generate a video": "POST /v1/videos",
+            "generate an image": "POST /v1/image",
+        },
+    }
 
 
 @app.get("/healthz", tags=["ops"])
