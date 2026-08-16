@@ -9,7 +9,7 @@ imagery, narrates it with ElevenLabs, and renders it with Remotion.
 
 | | |
 |---|---|
-| **Live API** | [Swagger](https://vira.ideaplaces.com/docs) · [openapi.json](https://vira.ideaplaces.com/openapi.json) — open, no key needed |
+| **Live API** | https://vira.ideaplaces.com · [Swagger](https://vira.ideaplaces.com/docs) · [openapi.json](https://vira.ideaplaces.com/openapi.json) — open, no key needed |
 | **Front end** | [jp-215/company-essence-lab](https://github.com/jp-215/company-essence-lab) — the Lovable app that calls this engine |
 | **Design** | [SPEC.md](./SPEC.md) · [ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [API.md](./docs/API.md) |
 
