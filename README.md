@@ -1,40 +1,76 @@
 # vira-engine
 
-Turns the 2,999 real TikToks in `company-essence-lab`'s database into a
-shootable — then rendered — ad for one company.
+Turns the real TikToks already winning in a category into finished video ads —
+and refuses to ship any it cannot ground in real evidence.
 
-Reads Lovable Cloud over PostgREST. Analyses the corpus. Writes a timed shooting
-script. Narrates it with ElevenLabs. Renders it with Remotion.
+Reads the live corpus over PostgREST. Verifies every source is reachable before
+a model sees it. Plans the film, writes a timed shooting script, generates the
+imagery, narrates it with ElevenLabs, and renders it with Remotion.
 
-Full design in [SPEC.md](./SPEC.md).
+| | |
+|---|---|
+| **Live API** | [Swagger](https://vira.ideaplaces.com/docs) · [openapi.json](https://vira.ideaplaces.com/openapi.json) — open, no key needed |
+| **Front end** | [jp-215/company-essence-lab](https://github.com/jp-215/company-essence-lab) — the Lovable app that calls this engine |
+| **Design** | [SPEC.md](./SPEC.md) · [ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [API.md](./docs/API.md) |
+
+## Watch it first
+
+Five ads for one brand, one per creative lane. Same corpus, same product,
+different creative direction — not the same ad reworded.
+
+| lane | | |
+|---|---|---|
+| problem-first | 20.5s | [mp4](https://vira.ideaplaces.com/media/sunday-oats/v001-20260816-003714-agentic/problem-first/sunday-oats-problem-first.mp4) |
+| demo-first | 25.5s | [mp4](https://vira.ideaplaces.com/media/sunday-oats/v002-20260816-003715-agentic/demo-first/sunday-oats-demo-first.mp4) |
+| founder-story | 26.5s | [mp4](https://vira.ideaplaces.com/media/sunday-oats/v003-20260816-003720-agentic/founder-story/sunday-oats-founder-story.mp4) |
+| social-proof | 22.5s | [mp4](https://vira.ideaplaces.com/media/sunday-oats/v004-20260816-003721-agentic/social-proof/sunday-oats-social-proof.mp4) |
+| contrarian | 21.5s | [mp4](https://vira.ideaplaces.com/media/sunday-oats/v005-20260816-003722-agentic/contrarian/sunday-oats-contrarian.mp4) |
+
+Every one carries a `RECIPE.md` next to it with the verbatim prompts that
+produced it.
 
 ## Status
 
-| Stage | State |
-|---|---|
-| 1 select | **working against live data** |
-| 2 verify | **working against live data** |
-| 3 analyze | written, untested — needs `ANTHROPIC_API_KEY` |
-| 4 remix | written, untested — needs `ANTHROPIC_API_KEY` |
-| 5 score | written, untested — needs `ANTHROPIC_API_KEY` |
-| 6 voice | written, untested — needs `ELEVENLABS_API_KEY` |
-| 7 render | written, untested — needs `npm install` in `video/` |
+Running end to end against live data. 333 tests passing.
 
-Stages 1–2 have been run end to end against the live corpus. Everything from 3
-onward compiles and is wired, but no API key was available to execute it.
+| Stage | |
+|---|---|
+| 1 select · 2 verify | corpus → verified shortlist |
+| 3 analyze · 3.5 direct | what works in the category → the shape of this film |
+| 4 remix · critique | write, then a hostile first viewer revises it |
+| 5 score | the evidence gate |
+| 6 voice · 6.5 imagery | ElevenLabs timestamps ‖ Gemini frames |
+| 7 render | Remotion |
+
+One text provider: **Azure gpt-5.4**. Imagery is Gemini, voice is ElevenLabs.
+
+| Job | Time |
+|---|---|
+| One video, deterministic | 74s |
+| Five videos | 314s |
+| One video, agentic crew | ~350s |
+| Re-render from saved props | ~40s, zero API cost |
 
 ## Run it
 
 ```bash
-python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # reads work with the defaults; add keys for 3+
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env                   # reads work with the defaults
 
 .venv/bin/python -m vira.cli companies
 .venv/bin/python -m vira.cli select chips --product "spicy chips" --verify
-.venv/bin/python -m vira.cli remix  chips --product "spicy chips" --out out/remix.json
+.venv/bin/python variants.py chips --product "spicy chips"    # five lanes, parallel
 ```
 
-Rendering:
+Or against the live API, no install:
+
+```bash
+curl -X POST https://vira.ideaplaces.com/v1/videos \
+  -H 'Content-Type: application/json' \
+  -d '{"company_slug":"sunday-oats","product":"cocoa hazelnut overnight oats"}'
+```
+
+Rendering locally:
 
 ```bash
 cd video && npm install
