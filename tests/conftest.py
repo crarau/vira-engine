@@ -7,11 +7,14 @@ Two things every test in here depends on:
    what "the age filter" means for the whole suite. The autouse fixture pins the
    documented defaults and restores whatever was there afterwards.
 2. **No network.** Nothing here builds a real client. The one module that
-   imports a vendor SDK at call time (`vira.llm`) is fed a fake in its own test.
+   imports a vendor SDK at call time (`vira.llm`) is fed the `azure_stub`
+   fixture below.
 """
 
 from __future__ import annotations
 
+import sys
+import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -28,8 +31,9 @@ BASELINE = {
     "watchlist_threshold": 3.5,
     "evidence_floor": 3.0,
     "fps": 30,
-    "llm_model": "claude-sonnet-5",
-    "anthropic_api_key": "test-key",
+    "agent_model": "gpt-5.4",
+    "azure_openai_endpoint": "https://test.openai.azure.com/",
+    "azure_openai_api_key": "test-key",
 }
 
 
@@ -45,6 +49,51 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+
+
+@pytest.fixture
+def azure_stub(monkeypatch):
+    """A fake `openai.AsyncAzureOpenAI` — the only text provider `vira.llm` has.
+
+    `vira.llm` imports the SDK inside the call, so the stub goes into
+    `sys.modules` rather than onto an attribute.
+
+    Replies are given in the provider's own vocabulary: either a bare string
+    (an ordinary completion) or a `(content, finish_reason)` pair. The API says
+    `"length"` where the rest of this codebase says `"max_tokens"`, and
+    translating that is `_azure`'s job — a stub that already spoke our dialect
+    would let the mapping be deleted with the suite still green.
+
+    Returns the list of request kwargs the fake client received, which is how
+    the retry's larger budget and its brevity hint get inspected.
+    """
+    sent: list[dict] = []
+
+    def install(*replies):
+        queue = [r if isinstance(r, tuple) else (r, "stop") for r in replies]
+
+        class Completions:
+            async def create(self, **kw):
+                sent.append(kw)
+                assert queue, "the model was called more times than expected"
+                content, finish = queue.pop(0)
+                choice = types.SimpleNamespace(
+                    message=types.SimpleNamespace(content=content),
+                    finish_reason=finish,
+                )
+                return types.SimpleNamespace(choices=[choice])
+
+        class AsyncAzureOpenAI:
+            def __init__(self, **kw):
+                self.kw = kw
+                self.chat = types.SimpleNamespace(completions=Completions())
+
+        module = types.ModuleType("openai")
+        module.AsyncAzureOpenAI = AsyncAzureOpenAI
+        monkeypatch.setitem(sys.modules, "openai", module)
+        return sent
+
+    return install
 
 
 @pytest.fixture(autouse=True)

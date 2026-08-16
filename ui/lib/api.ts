@@ -597,6 +597,93 @@ export const regenerate = (id: string, body: { notes: string[]; lane?: string })
     body: JSON.stringify(body),
   });
 
+// --------------------------------------------------------- judge (public)
+//
+// The one surface in this app that is not for an operator. A paid panellist
+// arrives from Terac with a token in the path and nothing else, and the whole
+// value of their vote is that it is independent of the engine's own grade.
+//
+// So this section breaks the "read every field with a default" rule in one
+// direction on purpose: it reads only the five fields a judge is allowed to
+// see, and drops everything else on the floor. `GET /v1/review-batches/{token}`
+// is already built to omit `score`, `disposition`, `lane` and `drop_reason` —
+// this is the second lock on the same door, so that a future field added to
+// the API response cannot reach the page by accident.
+
+/** One cut as a judge sees it. There is no score field, and there must not be. */
+export interface JudgeVideo {
+  video_id: string;
+  position: number;
+  hook: string;
+  duration_s: number;
+  mp4_url: string;
+}
+
+export interface JudgeBatch {
+  title: string;
+  videos: JudgeVideo[];
+}
+
+export interface VoteBody {
+  /** `terac:<teracSubmissionId>` for a panellist, `anon:<random>` otherwise. */
+  reviewer_ref: string;
+  video_id: string;
+  /** 1–5. The API requires it: there is no comment-only or pick-only vote. */
+  rating: number;
+  picked: boolean;
+  comment: string;
+}
+
+export interface VoteAccepted {
+  recorded: boolean;
+  reviewer_ref: string;
+  video_id: string;
+}
+
+/**
+ * `GET /v1/review-batches/{token}` — PUBLIC, unauthenticated, no account.
+ *
+ * A 404 here means the token is wrong or the batch is gone; the page says that
+ * in plain language rather than showing a panellist an error code.
+ */
+export async function getJudgeBatch(token: string): Promise<JudgeBatch> {
+  const payload = await api<unknown>(
+    `/v1/review-batches/${encodeURIComponent(token)}`,
+  );
+  const obj = (payload && typeof payload === "object" ? payload : {}) as Record<
+    string,
+    unknown
+  >;
+  const rows = unwrap<Record<string, unknown>>(obj, "videos");
+  return {
+    title: typeof obj.title === "string" ? obj.title : "",
+    // Hand-picked, never spread. See the note above.
+    videos: rows.map((r, i) => ({
+      video_id: String(r.video_id ?? ""),
+      position: typeof r.position === "number" ? r.position : i + 1,
+      hook: typeof r.hook === "string" ? r.hook : "",
+      duration_s: typeof r.duration_s === "number" ? r.duration_s : 0,
+      mp4_url: typeof r.mp4_url === "string" ? r.mp4_url : "",
+    })).filter((v) => v.video_id),
+  };
+}
+
+/**
+ * `POST /v1/review-batches/{token}/votes` — one reviewer's verdict on one cut.
+ *
+ * The unique index is `(batch_id, video_id, reviewer_ref)` and the insert
+ * upserts, so calling this twice for the same video is an edit, not an error.
+ * That is what lets the page save on every tap instead of at the end.
+ *
+ * `keepalive` so a vote posted as the tab is being closed still leaves.
+ */
+export const submitVote = (token: string, body: VoteBody, keepalive = false) =>
+  api<VoteAccepted>(`/v1/review-batches/${encodeURIComponent(token)}/votes`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    keepalive,
+  });
+
 // ------------------------------------------------------------ thresholds
 
 /**

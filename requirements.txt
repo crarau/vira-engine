@@ -1,13 +1,13 @@
 httpx==0.28.1
 pydantic==2.10.4
 pydantic-settings==2.7.0
-anthropic==0.42.0
 openai==3.1.0
 rich==13.9.4
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 fastapi==0.121.2
 uvicorn[standard]==0.42.0
+gunicorn==23.0.0
 
 # --- test ---
 pytest==9.1.1

@@ -9,8 +9,6 @@ exact substrings, not for the presence of a section heading.
 from __future__ import annotations
 
 import json
-import sys
-import types
 
 import pytest
 
@@ -21,31 +19,9 @@ from tests.conftest import make_company, make_remix, make_score, make_trend
 SYSTEM = "You are a sceptical grader.\nScore 0-5 per dimension."
 PROMPT = 'Write the ad.\n\n```json\n{"weird": "characters | in <the> prompt"}\n```'
 
-
-@pytest.fixture
-def anthropic_stub(monkeypatch):
-    def install(body: str = '{"ok": true}', stop: str = "end_turn"):
-        class Block:
-            type = "text"
-            text = body
-
-        class Msg:
-            content = [Block()]
-            stop_reason = stop
-
-        class Messages:
-            async def create(self, **kw):
-                return Msg()
-
-        class AsyncAnthropic:
-            def __init__(self, **_):
-                self.messages = Messages()
-
-        module = types.ModuleType("anthropic")
-        module.AsyncAnthropic = AsyncAnthropic
-        monkeypatch.setitem(sys.modules, "anthropic", module)
-
-    return install
+# `azure_stub` comes from conftest. What is being tested here is the wiring
+# between `vira.llm` and the Recorder, so the provider behind it only has to be
+# the real one — Azure, the single text path.
 
 
 def finish(rec, **kw):
@@ -85,9 +61,9 @@ async def test_the_recorder_is_restored_after_a_failure(tmp_path):
 
 
 async def test_llm_calls_route_themselves_into_the_active_recorder(
-    tmp_path, anthropic_stub
+    tmp_path, azure_stub
 ):
-    anthropic_stub('{"hook": "yes"}')
+    azure_stub('{"hook": "yes"}')
     async with Recorder(tmp_path) as rec:
         await complete(PROMPT, system=SYSTEM, max_tokens=1500)
 
@@ -97,12 +73,12 @@ async def test_llm_calls_route_themselves_into_the_active_recorder(
     assert call["user_prompt"] == PROMPT
     assert call["response"] == '{"hook": "yes"}'
     assert call["max_tokens"] == 1500
-    assert call["stop_reason"] == "end_turn"
+    assert call["stop_reason"] == "stop"
 
 
-async def test_an_llm_call_with_no_recorder_does_not_explode(anthropic_stub):
+async def test_an_llm_call_with_no_recorder_does_not_explode(azure_stub):
     """The pipeline has to run outside a Recorder too — e.g. from the CLI."""
-    anthropic_stub()
+    azure_stub('{"ok": true}')
     text, _ = await complete("p", system="s")
     assert text == '{"ok": true}'
 
@@ -129,8 +105,8 @@ async def test_notes_are_kept(tmp_path):
 async def test_finish_writes_both_artifacts(tmp_path):
     async with Recorder(tmp_path / "founder-story") as rec:
         rec.note("lane", "founder-story")
-        rec.capture(system=SYSTEM, prompt=PROMPT, model="claude-sonnet-5",
-                    max_tokens=4000, response='{"hook": "x"}', stop_reason="end_turn")
+        rec.capture(system=SYSTEM, prompt=PROMPT, model="gpt-5.4",
+                    max_tokens=4000, response='{"hook": "x"}', stop_reason="stop")
     path = finish(rec)
 
     assert path.name == "recipe.json"
@@ -140,8 +116,8 @@ async def test_finish_writes_both_artifacts(tmp_path):
 
 async def test_recipe_json_holds_the_prompts_verbatim(tmp_path):
     async with Recorder(tmp_path) as rec:
-        rec.capture(system=SYSTEM, prompt=PROMPT, model="claude-sonnet-5",
-                    max_tokens=4000, response="{}", stop_reason="end_turn")
+        rec.capture(system=SYSTEM, prompt=PROMPT, model="gpt-5.4",
+                    max_tokens=4000, response="{}", stop_reason="stop")
     finish(rec)
 
     data = json.loads((tmp_path / "recipe.json").read_text())
@@ -204,15 +180,15 @@ async def test_a_recipe_without_a_score_still_writes(tmp_path):
 async def test_recipe_md_holds_the_prompts_verbatim(tmp_path):
     async with Recorder(tmp_path) as rec:
         rec.note("lane", "founder-story")
-        rec.capture(system=SYSTEM, prompt=PROMPT, model="claude-sonnet-5",
-                    max_tokens=4000, response='{"hook": "x"}', stop_reason="end_turn")
+        rec.capture(system=SYSTEM, prompt=PROMPT, model="gpt-5.4",
+                    max_tokens=4000, response='{"hook": "x"}', stop_reason="stop")
     finish(rec)
 
     md = (tmp_path / "RECIPE.md").read_text()
     assert SYSTEM in md
     assert PROMPT in md
     assert '{"hook": "x"}' in md
-    assert "claude-sonnet-5" in md
+    assert "gpt-5.4" in md
     assert "max_tokens=4000" in md
 
 
@@ -267,7 +243,7 @@ async def test_finish_creates_the_output_directory(tmp_path):
 
 
 async def test_a_captured_call_names_its_stage_when_the_api_is_driving(
-    tmp_path, anthropic_stub
+    tmp_path, azure_stub
 ):
     """The recipe reads better when a prompt says where it came from.
 
@@ -277,7 +253,7 @@ async def test_a_captured_call_names_its_stage_when_the_api_is_driving(
     """
     from vira.api import events
 
-    anthropic_stub('{"hook": "yes"}')
+    azure_stub('{"hook": "yes"}')
     job = "5c4b3a29-1111-2222-3333-444455556666"
     try:
         with events.watching(job):
@@ -290,8 +266,8 @@ async def test_a_captured_call_names_its_stage_when_the_api_is_driving(
     assert rec.calls[0]["stage"] == "critique"
 
 
-async def test_a_cli_call_records_no_stage(tmp_path, anthropic_stub):
-    anthropic_stub('{"hook": "yes"}')
+async def test_a_cli_call_records_no_stage(tmp_path, azure_stub):
+    azure_stub('{"hook": "yes"}')
     async with Recorder(tmp_path) as rec:
         await complete(PROMPT, system=SYSTEM)
 

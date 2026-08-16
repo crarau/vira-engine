@@ -9,60 +9,14 @@ budget rather than merely try again, so both halves are asserted.
 from __future__ import annotations
 
 import json
-import sys
-import types
 
 import pytest
 
 from vira import llm
 from vira.llm import LLMError, _extract, complete, complete_json
 
-
-class Block:
-    def __init__(self, text: str, kind: str = "text"):
-        self.text = text
-        self.type = kind
-
-
-class Reply:
-    def __init__(self, blocks, stop_reason):
-        self.content = blocks
-        self.stop_reason = stop_reason
-
-
-def text_reply(body: str, stop: str = "end_turn") -> Reply:
-    return Reply([Block(body)], stop)
-
-
-@pytest.fixture
-def anthropic_stub(monkeypatch):
-    """`vira.llm` imports the SDK inside the call, so the stub goes in sys.modules.
-
-    Returns the list of requests the fake client received, which is how the
-    retry's larger budget and brevity hint get inspected.
-    """
-    sent: list[dict] = []
-
-    def install(*replies):
-        queue = list(replies)
-
-        class Messages:
-            async def create(self, **kw):
-                sent.append(kw)
-                assert queue, "the model was called more times than expected"
-                return queue.pop(0)
-
-        class AsyncAnthropic:
-            def __init__(self, api_key=None, **_):
-                self.api_key = api_key
-                self.messages = Messages()
-
-        module = types.ModuleType("anthropic")
-        module.AsyncAnthropic = AsyncAnthropic
-        monkeypatch.setitem(sys.modules, "anthropic", module)
-        return sent
-
-    return install
+# `azure_stub` comes from conftest — the same fake provider drives the
+# provenance tests, and one stub means one place to keep honest.
 
 
 # --- _extract ---------------------------------------------------------------
@@ -110,112 +64,146 @@ def test_everything_extract_returns_is_loadable(raw):
 # --- complete ---------------------------------------------------------------
 
 
-async def test_complete_joins_text_blocks_and_ignores_the_rest(anthropic_stub):
-    anthropic_stub(
-        Reply([Block("part one "), Block("{}", "tool_use"), Block("part two")],
-              "end_turn")
-    )
+async def test_complete_returns_the_message_content(azure_stub):
+    azure_stub("the whole answer")
     text, stop = await complete("p", system="s")
 
-    assert text == "part one part two"
-    assert stop == "end_turn"
+    assert text == "the whole answer"
+    assert stop == "stop"
 
 
-async def test_complete_refuses_to_run_without_a_key(cfg, anthropic_stub):
-    cfg.anthropic_api_key = None
-    anthropic_stub(text_reply("{}"))
-    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
+async def test_a_reply_with_no_content_becomes_an_empty_string(azure_stub):
+    """A filtered reply carries `content: null`, and every caller downstream of
+    here does string work on what comes back."""
+    azure_stub((None, "content_filter"))
+    text, stop = await complete("p", system="s")
+
+    assert text == ""
+    assert stop == "content_filter"
+
+
+async def test_complete_refuses_to_run_without_a_key(cfg, azure_stub):
+    cfg.azure_openai_api_key = None
+    azure_stub("{}")
+    with pytest.raises(LLMError, match="AZURE_OPENAI_API_KEY"):
+        await complete("p", system="s")
+
+
+async def test_complete_refuses_to_run_without_an_endpoint(cfg, azure_stub):
+    cfg.azure_openai_endpoint = None
+    azure_stub("{}")
+    with pytest.raises(LLMError, match="AZURE_OPENAI_ENDPOINT"):
         await complete("p", system="s")
 
 
 async def test_complete_sends_the_configured_model_and_the_given_budget(
-    cfg, anthropic_stub
+    cfg, azure_stub
 ):
-    cfg.llm_model = "claude-test-model"
-    sent = anthropic_stub(text_reply("{}"))
+    cfg.agent_model = "gpt-test-model"
+    sent = azure_stub("{}")
     await complete("the prompt", system="the system", max_tokens=123)
 
-    assert sent[0]["model"] == "claude-test-model"
-    assert sent[0]["max_tokens"] == 123
-    assert sent[0]["system"] == "the system"
+    assert sent[0]["model"] == "gpt-test-model"
+    assert sent[0]["max_completion_tokens"] == 123
+    assert sent[0]["messages"] == [
+        {"role": "system", "content": "the system"},
+        {"role": "user", "content": "the prompt"},
+    ]
+
+
+async def test_an_empty_system_prompt_sends_no_system_message(azure_stub):
+    sent = azure_stub("{}")
+    await complete("the prompt", system="")
+
     assert sent[0]["messages"] == [{"role": "user", "content": "the prompt"}]
 
 
-async def test_complete_surfaces_the_stop_reason(anthropic_stub):
-    """Truncation is only detectable through this value, so it must not be lost."""
-    anthropic_stub(text_reply("half a th", stop="max_tokens"))
+async def test_the_providers_length_is_reported_as_max_tokens(azure_stub):
+    """The provider says "length" where the rest of this codebase says
+    "max_tokens". `complete_json`'s truncation retry keys on the literal string,
+    so without this mapping every truncated reply reads as a complete one."""
+    azure_stub(("half a th", "length"))
     _, stop = await complete("p", system="s")
+
     assert stop == "max_tokens"
+
+
+async def test_an_ordinary_stop_reason_is_passed_through(azure_stub):
+    azure_stub(("the whole answer", "stop"))
+    _, stop = await complete("p", system="s")
+
+    assert stop == "stop"
 
 
 # --- complete_json ----------------------------------------------------------
 
 
-async def test_json_returns_on_the_first_clean_attempt(anthropic_stub):
-    sent = anthropic_stub(text_reply('{"hook": "yes"}'))
+async def test_json_returns_on_the_first_clean_attempt(azure_stub):
+    sent = azure_stub('{"hook": "yes"}')
     assert await complete_json("p", system="s") == {"hook": "yes"}
     assert len(sent) == 1
 
 
-async def test_truncation_retries_with_a_bigger_budget_and_succeeds(anthropic_stub):
+async def test_truncation_retries_with_a_bigger_budget_and_succeeds(azure_stub):
     """The tail of a truncated response is simply gone, so the retry has to buy
-    more room and ask for brevity — repairing the fragment is not an option."""
-    sent = anthropic_stub(
-        text_reply('{"hook": "a very long string that ran out of bud',
-                   stop="max_tokens"),
-        text_reply('{"hook": "short"}'),
+    more room and ask for brevity — repairing the fragment is not an option.
+
+    The first reply finishes on the provider's "length", which is the only way
+    this path is reachable in production."""
+    sent = azure_stub(
+        ('{"hook": "a very long string that ran out of bud', "length"),
+        '{"hook": "short"}',
     )
     got = await complete_json("write me an ad", system="s", max_tokens=1000)
 
     assert got == {"hook": "short"}
     assert len(sent) == 2
-    assert sent[0]["max_tokens"] == 1000
-    assert sent[1]["max_tokens"] == 2000
-    assert sent[1]["messages"][0]["content"].startswith("write me an ad")
-    assert llm.TERSE in sent[1]["messages"][0]["content"]
-    assert sent[1]["system"] == sent[0]["system"]
+    assert sent[0]["max_completion_tokens"] == 1000
+    assert sent[1]["max_completion_tokens"] == 2000
+    assert sent[1]["messages"][-1]["content"].startswith("write me an ad")
+    assert llm.TERSE in sent[1]["messages"][-1]["content"]
+    assert sent[1]["messages"][0] == sent[0]["messages"][0]
 
 
-async def test_the_first_attempt_carries_no_brevity_hint(anthropic_stub):
-    sent = anthropic_stub(text_reply("{}"))
+async def test_the_first_attempt_carries_no_brevity_hint(azure_stub):
+    sent = azure_stub("{}")
     await complete_json("write me an ad", system="s")
-    assert sent[0]["messages"][0]["content"] == "write me an ad"
+    assert sent[0]["messages"][-1]["content"] == "write me an ad"
 
 
-async def test_unparseable_json_is_retried_then_returned(anthropic_stub):
-    sent = anthropic_stub(text_reply("I'd rather not."), text_reply('{"ok": true}'))
+async def test_unparseable_json_is_retried_then_returned(azure_stub):
+    sent = azure_stub("I'd rather not.", '{"ok": true}')
     assert await complete_json("p", system="s") == {"ok": True}
     assert len(sent) == 2
 
 
-async def test_a_fenced_reply_needs_no_retry(anthropic_stub):
-    sent = anthropic_stub(text_reply('```json\n{"ok": true}\n```'))
+async def test_a_fenced_reply_needs_no_retry(azure_stub):
+    sent = azure_stub('```json\n{"ok": true}\n```')
     assert await complete_json("p", system="s") == {"ok": True}
     assert len(sent) == 1
 
 
-async def test_two_truncations_raise_rather_than_return_a_fragment(anthropic_stub):
-    anthropic_stub(text_reply('{"a": 1', stop="max_tokens"),
-                   text_reply('{"a": 1', stop="max_tokens"))
+async def test_two_truncations_raise_rather_than_return_a_fragment(azure_stub):
+    azure_stub(('{"a": 1', "length"), ('{"a": 1', "length"))
     with pytest.raises(LLMError, match="truncated"):
         await complete_json("p", system="s")
 
 
-async def test_a_json_array_is_not_accepted_as_an_object(anthropic_stub):
+async def test_a_json_array_is_not_accepted_as_an_object(azure_stub):
     """Callers index the result by key; a list would blow up far from here."""
-    anthropic_stub(text_reply("[1, 2, 3]"), text_reply("[1, 2, 3]"))
+    azure_stub("[1, 2, 3]", "[1, 2, 3]")
     with pytest.raises(LLMError, match="JSON object"):
         await complete_json("p", system="s")
 
 
-async def test_a_persistently_broken_model_raises_with_the_last_error(anthropic_stub):
-    anthropic_stub(text_reply("nope"), text_reply("still nope"))
+async def test_a_persistently_broken_model_raises_with_the_last_error(azure_stub):
+    azure_stub("nope", "still nope")
     with pytest.raises(LLMError, match="unparseable"):
         await complete_json("p", system="s")
 
 
-async def test_it_gives_up_after_two_attempts_not_forever(anthropic_stub):
-    sent = anthropic_stub(text_reply("nope"), text_reply("nope"))
+async def test_it_gives_up_after_two_attempts_not_forever(azure_stub):
+    sent = azure_stub("nope", "nope")
     with pytest.raises(LLMError):
         await complete_json("p", system="s")
     assert len(sent) == 2
@@ -231,10 +219,10 @@ async def test_it_gives_up_after_two_attempts_not_forever(anthropic_stub):
 VERBOSE_JOB = "9d8c7b6a-5555-4444-3333-222211110000"
 
 
-async def test_a_call_outside_a_job_publishes_nothing(anthropic_stub):
+async def test_a_call_outside_a_job_publishes_nothing(azure_stub):
     from vira.api import events
 
-    anthropic_stub(text_reply("the answer"))
+    azure_stub("the answer")
     assert events.current_job() is None
 
     text, _ = await complete("the prompt", system="the system")
@@ -243,11 +231,11 @@ async def test_a_call_outside_a_job_publishes_nothing(anthropic_stub):
     assert events.bus.known(VERBOSE_JOB) is False
 
 
-async def test_a_call_inside_a_job_puts_the_whole_prompt_on_the_feed(anthropic_stub):
+async def test_a_call_inside_a_job_puts_the_whole_prompt_on_the_feed(azure_stub):
     from vira.api import events
 
     prompt = "Write the ad.\n" + ("y" * 9_000)
-    anthropic_stub(text_reply("the answer"))
+    azure_stub("the answer")
     try:
         with events.watching(VERBOSE_JOB):
             events.set_stage("write")
@@ -258,9 +246,9 @@ async def test_a_call_inside_a_job_puts_the_whole_prompt_on_the_feed(anthropic_s
         (event,) = events.bus.history(VERBOSE_JOB, level="debug")
         assert event.stage == "llm"
         assert event.data["pipeline_stage"] == "write"
-        assert event.data["model"] == "claude-sonnet-5"
+        assert event.data["model"] == "gpt-5.4"
         assert event.data["max_tokens"] == 321
-        assert event.data["stop_reason"] == "end_turn"
+        assert event.data["stop_reason"] == "stop"
         assert event.data["system_prompt"] == "the system"
         assert event.data["user_prompt"] == prompt
         assert event.data["response"] == "the answer"
@@ -268,7 +256,7 @@ async def test_a_call_inside_a_job_puts_the_whole_prompt_on_the_feed(anthropic_s
         events.bus.forget(VERBOSE_JOB)
 
 
-async def test_the_job_binding_does_not_outlive_its_block(anthropic_stub):
+async def test_the_job_binding_does_not_outlive_its_block(azure_stub):
     from vira.api import events
 
     with events.watching(VERBOSE_JOB):

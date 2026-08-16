@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # Publishable key, and it stays in a public repo on purpose. It is
     # RLS-bound, read-only, and Lovable itself commits it to the frontend repo
     # and ships it in every browser bundle — that is what "publishable" means.
-    # The keys that DO matter (Gemini, ElevenLabs, Anthropic, Azure, Stripe,
+    # The keys that DO matter (Gemini, ElevenLabs, Azure, Stripe,
     # the agent password) have no defaults here and come from the environment.
     # If this ever needs to change, rotate it in Lovable, not here.
     supabase_url: str = "https://otsqjpmsiysitpkqoejr.supabase.co"
@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     evidence_floor: float = 3.0
 
     # --- model ----------------------------------------------------------
-    anthropic_api_key: str | None = None
-    llm_model: str = "claude-sonnet-5"
+    # Azure gpt-5.4 is the only text model. Anthropic was removed deliberately.
+    llm_provider: str = "azure"
 
     # --- agentic crew -----------------------------------------------------
     azure_openai_endpoint: str | None = None

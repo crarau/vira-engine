@@ -96,6 +96,95 @@ worth seeing. It **does not invent ratings.** A submission's free-text narrative
 belongs to the batch, not to one video, so it is imported only when an operator
 names a video to hang it on (`?attach_to_video_id=…`), as a comment-only vote.
 
+## The judge page — `VIRA_JUDGE_BASE_URL`
+
+The `task_url` is the entire integration, so where it lands is not a detail.
+
+```
+VIRA_JUDGE_BASE_URL=https://console.ideaplaces.com/judge
+```
+
+**Set this in the box's env file.** `vira/api/routes/reviews.py` reads it from
+the environment at import time and falls back to this API's own JSON endpoint
+when it is empty — which is a live, correct, and completely useless link for a
+human being. A panellist Terac has already been paid for arrives at
+`https://vira.ideaplaces.com/v1/review-batches/<token>` and is shown a JSON
+blob. Nothing errors; the money is just gone.
+
+Because it is read at import, **the value only takes effect after uvicorn
+restarts**, and because `judge_url` is computed when the batch is created, a
+batch minted before the restart keeps the old URL. Order of operations on the
+box: set the variable → restart → `POST /v1/review-batches` → publish *that*
+batch to Terac.
+
+Verify it took:
+
+```bash
+curl -s -X POST https://vira.ideaplaces.com/v1/review-batches \
+  -H 'content-type: application/json' \
+  -d '{"title":"smoke","video_ids":["<id>","<id>"]}' | jq -r .judge_url
+# https://console.ideaplaces.com/judge/<public_token>   ← not /v1/review-batches/
+```
+
+The dry-run payload printed further up in this document shows the fallback
+form, because it was captured with the variable unset.
+
+Changing the base URL does not break reconciliation: `terac.batch_token_of`
+takes the **last path segment** of `task_url`, and `/judge/<token>` ends in the
+token exactly as `/v1/review-batches/<token>` did. Query parameters are not
+part of the path, so the ones Terac appends per participant are ignored by it.
+
+### What is at that URL
+
+`ui/app/judge/[token]/page.tsx` in the Next.js console — public, no auth, and
+deliberately outside the console's own chrome (`ui/app/judge/layout.tsx` covers
+the operator nav rather than the judge being shown links to Corpus and
+Library). It calls exactly two endpoints, both of them the public ones:
+`GET /v1/review-batches/{token}` and `POST /v1/review-batches/{token}/votes`.
+
+It never asks for a score. The judge payload omits `score`, `disposition` and
+`lane`, and `getJudgeBatch` in `ui/lib/api.ts` whitelists the five fields it
+reads on top of that, so a field added to that response later cannot reach a
+panellist's eyes by accident.
+
+### How `reviewer_ref` is resolved
+
+| Arrives with | `reviewer_ref` sent | Reconciles via sync |
+|---|---|---|
+| `?teracSubmissionId=abc123` | `terac:abc123` | yes |
+| `?submissionId=abc123` and no `teracSubmissionId` | `terac:abc123` | yes, if Terac's two ids agree |
+| neither | `anon:<uuid>`, persisted in `localStorage` | no — and should not |
+
+`teracSubmissionId` is the contract, and it is the one that matches
+`terac.submission_ref`, which stores a submission under `terac:<submission id>`.
+`submissionId` is consulted **only** when the first is absent: Terac appends
+both, and an anonymous ref for someone who was paid is a worse failure than a
+ref an operator has to match up by hand.
+
+Anyone else — the team, a judge at a demo table, anyone handed the link — gets
+a random ref kept in `localStorage` so a reload is still the same person, under
+an `anon:` prefix so the two populations stay separable in `review_votes`
+forever after. An unpaid opinion must never be counted as panel data.
+
+### Two things the page has to work around
+
+- **`rating` is required.** `VoteRequest.rating` is `ge=1, le=5` with no
+  default, so a pick or a comment on its own has nowhere to go. The page keeps
+  both in the draft and says "give it a rating and this gets saved" rather than
+  posting a 422 into the void. (`store.record_vote` accepts `rating=None` — the
+  sync route uses it for comment-only rows — but the HTTP schema does not.)
+- **There is no read-back of one's own votes.** The judge payload is one-way
+  and `/results` is keyed by batch id, not by the public token, precisely so
+  holding the judge link does not hand you the running tally. So "saved" after
+  a reload comes from a local receipt of what posted successfully, not from
+  the server.
+
+Votes post on every tap rather than at the end, and re-answering is an edit,
+not a duplicate — `review_votes` is unique on `(batch_id, video_id,
+reviewer_ref)` and the insert upserts. The page says "this replaced your
+earlier answer" out loud so a panellist who changes their mind does not think
+they have double-voted and abandon.
+
 ## Four choices in the payload
 
 - **`activity`, not `interview`.** Both take a `task_url`; `interview` frames it

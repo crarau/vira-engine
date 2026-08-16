@@ -22,21 +22,16 @@ async def complete(
     prompt: str, *, system: str, max_tokens: int = 4000
 ) -> tuple[str, str | None]:
     """Return (text, stop_reason). The stop reason is how we detect truncation."""
-    from anthropic import AsyncAnthropic
 
     s = settings()
-    if not s.anthropic_api_key:
-        raise LLMError("ANTHROPIC_API_KEY is not set")
-    client = AsyncAnthropic(api_key=s.anthropic_api_key)
     started = time.monotonic()
-    msg = await client.messages.create(
-        model=s.llm_model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
+
+    # Azure gpt-5.4 is the only text provider. Gemini draws and reads images;
+    # nothing else calls a language model. Anthropic was removed rather than
+    # left as a fallback — the account is unfunded, and a dormant branch that
+    # nobody exercises is a trap, not a safety net.
+    text, stop_reason = await _azure(prompt, system=system, max_tokens=max_tokens)
     elapsed_ms = int((time.monotonic() - started) * 1000)
-    text = "".join(b.text for b in msg.content if b.type == "text")
 
     # Two destinations, and they are not the same thing. The Recorder is the
     # durable record — it lands in the recipe next to the mp4 and outlives the
@@ -45,19 +40,53 @@ async def complete(
     # `variants.py` and `agentic_video.py` unchanged.
     from vira.provenance import current
 
+    model_used = s.agent_model
     stage = _publish(
-        system=system or "", prompt=prompt, model=s.llm_model,
-        max_tokens=max_tokens, response=text, stop_reason=msg.stop_reason,
+        system=system or "", prompt=prompt, model=model_used,
+        max_tokens=max_tokens, response=text, stop_reason=stop_reason,
         elapsed_ms=elapsed_ms,
     )
     if rec := current():
         rec.capture(
-            system=system or "", prompt=prompt, model=s.llm_model,
-            max_tokens=max_tokens, response=text, stop_reason=msg.stop_reason,
+            system=system or "", prompt=prompt, model=model_used,
+            max_tokens=max_tokens, response=text, stop_reason=stop_reason,
             stage=stage,
         )
 
-    return text, msg.stop_reason
+    return text, stop_reason
+
+
+async def _azure(
+    prompt: str, *, system: str, max_tokens: int
+) -> tuple[str, str | None]:
+    """The one text provider.
+
+    `stop_reason` is normalised to the literal "max_tokens" — the truncation retry
+    in `complete_json` keys on that exact string, and the OpenAI API says
+    "length" for the same thing.
+    """
+    from openai import AsyncAzureOpenAI
+
+    s = settings()
+    if not (s.azure_openai_endpoint and s.azure_openai_api_key):
+        raise LLMError("AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY are not set")
+
+    client = AsyncAzureOpenAI(
+        azure_endpoint=s.azure_openai_endpoint,
+        api_key=s.azure_openai_api_key,
+        api_version="2024-10-21",
+    )
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    r = await client.chat.completions.create(
+        model=s.agent_model, messages=messages, max_completion_tokens=max_tokens,
+    )
+    choice = r.choices[0]
+    finish = choice.finish_reason
+    return (choice.message.content or ""), ("max_tokens" if finish == "length" else finish)
 
 
 def _publish(

@@ -74,18 +74,32 @@ fi
 docker exec -i vira-pg psql -q -U vira -d vira -v ON_ERROR_STOP=1 < sql/schema.sql
 REMOTE_SCRIPT
 
-# --- 3. restart and verify ------------------------------------------------
-blue "==> restarting the API"
+# --- 3. reload and verify ---------------------------------------------------
+# SIGHUP, not restart. The team is using this URL and a generation runs for
+# minutes; killing the process throws away work someone is waiting on. Gunicorn
+# starts workers on the new code and retires the old ones only once they are
+# idle. Falls back to a cold start if nothing is running yet.
+blue "==> reloading the API (no downtime)"
 ssh "$HOST" "bash -s" <<REMOTE_SCRIPT
 set -uo pipefail
 cd $REMOTE
-pkill -f "uvicorn vira.api.app" 2>/dev/null || true
-sleep 2
 set -a; . ./.env; set +a
-nohup ./.venv312/bin/python -m uvicorn vira.api.app:app \
-  --host 127.0.0.1 --port $PORT --proxy-headers --forwarded-allow-ips 127.0.0.1 \
-  > /tmp/vira-api.log 2>&1 &
-for i in \$(seq 1 30); do
+
+PID=\$(cat /tmp/vira-api.pid 2>/dev/null || true)
+if [ -n "\$PID" ] && kill -0 "\$PID" 2>/dev/null; then
+  echo "    HUP -> \$PID (in-flight jobs keep running on the old workers)"
+  kill -HUP "\$PID"
+else
+  echo "    nothing running, cold start"
+  # setsid: without it the master dies with this ssh session.
+  pkill -f "gunicorn.*vira.api.app" 2>/dev/null || true
+  sleep 1
+  setsid nohup ./.venv312/bin/gunicorn vira.api.app:app \
+    -c deploy/gunicorn.conf.py > /tmp/vira-api.log 2>&1 < /dev/null &
+  disown 2>/dev/null || true
+fi
+
+for i in \$(seq 1 40); do
   curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0
   sleep 2
 done
@@ -94,9 +108,8 @@ REMOTE_SCRIPT
 
 if [[ $? -ne 0 ]]; then
   red "==> new commit will not start. Rolling back to $PREV_SHA"
-  ssh "$HOST" "cd $REMOTE && git reset -q --hard $PREV_SHA && set -a && . ./.env && set +a && \
-    nohup ./.venv312/bin/python -m uvicorn vira.api.app:app --host 127.0.0.1 --port $PORT \
-    --proxy-headers --forwarded-allow-ips 127.0.0.1 > /tmp/vira-api.log 2>&1 &"
+  ssh "$HOST" "cd $REMOTE && git reset -q --hard $PREV_SHA && \
+    kill -HUP \$(cat /tmp/vira-api.pid) 2>/dev/null || true"
   exit 1
 fi
 
