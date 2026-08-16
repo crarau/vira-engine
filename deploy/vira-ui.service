@@ -1,0 +1,19 @@
+[Unit]
+Description=Vira console UI
+After=network-online.target vira-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chipdev
+WorkingDirectory=/home/chipdev/vira-engine/ui
+# NEXT_PUBLIC_* is inlined at build time, so this only matters for the server
+# runtime; the browser bundle already has the API base baked in.
+Environment=NODE_ENV=production
+Environment=PATH=/home/chipdev/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/chipdev/.nvm/versions/node/v20.20.0/bin/npx next start -p 3400
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

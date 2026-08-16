@@ -6,45 +6,17 @@ import {
   interpolate,
   random,
   Sequence,
-  spring,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { Caption, CaptionScrim } from "./Captions";
+import type { AdVideoProps, BeatProps } from "./types";
 
-export type WordProps = { w: string; startFrame: number; endFrame: number };
-
-export type BeatProps = {
-  say: string;
-  show: string;
-  shot: string;
-  startFrame: number;
-  endFrame: number;
-  image: string | null;
-  credit: string | null;
-  words: WordProps[];
-};
-
-export type AdVideoProps = {
-  brand: string;
-  product: string;
-  hook: string;
-  cta: string;
-  caption: string;
-  hashtags: string[];
-  audioSrc: string | null;
-  audioFile?: string;
-  /** Burn the director's camera notes into the frame. Off by default — they
-   *  are instructions for whoever shoots the real thing, not something a
-   *  viewer should ever see. Turn on to produce a shooting guide. */
-  showShotNotes?: boolean;
-  fps: number;
-  beats: BeatProps[];
-};
+export type { AdVideoProps, BeatProps, WordProps } from "./types";
 
 const INK = "#08080C";
 const ACCENT = "#F5C518";
-const HOT = "#FF3B30";
 const FG = "#FFFFFF";
 const FONT = "Inter, -apple-system, system-ui, sans-serif";
 const XFADE = 8;
@@ -63,7 +35,6 @@ const Backdrop: React.FC<{ beats: BeatProps[] }> = ({ beats }) => {
       {beats.map((beat, i) => {
         if (!beat.image) return null;
         const start = Math.max(beat.startFrame - XFADE, 0);
-        const span = Math.max(beat.endFrame - beat.startFrame, 1);
         const opacity = interpolate(frame, [start, start + XFADE], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
@@ -111,12 +82,15 @@ const Backdrop: React.FC<{ beats: BeatProps[] }> = ({ beats }) => {
   );
 };
 
+/** Shaping, not masking. The image is the reason anyone stops scrolling, so
+ *  this only buys contrast for the brand chip at the top; the caption band
+ *  gets its own scrim further down and the middle is left alone. */
 const Grade: React.FC = () => {
   const frame = useCurrentFrame();
   return (
     <>
-      <AbsoluteFill style={{ background: "radial-gradient(ellipse at 50% 40%, rgba(0,0,0,0) 30%, rgba(0,0,0,0.7) 100%)" }} />
-      <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(8,8,12,0.78) 0%, rgba(8,8,12,0.06) 24%, rgba(8,8,12,0.22) 50%, rgba(8,8,12,0.94) 100%)" }} />
+      <AbsoluteFill style={{ background: "radial-gradient(ellipse at 50% 42%, rgba(0,0,0,0) 42%, rgba(0,0,0,0.42) 100%)" }} />
+      <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(8,8,12,0.6) 0%, rgba(8,8,12,0.05) 20%, rgba(8,8,12,0) 55%, rgba(8,8,12,0.18) 100%)" }} />
       <AbsoluteFill
         style={{
           opacity: 0.055,
@@ -127,173 +101,6 @@ const Grade: React.FC = () => {
         }}
       />
     </>
-  );
-};
-
-/* ------------------------------------------------------------------ *
- * Five caption treatments. The beat index picks one, so consecutive
- * beats never animate the same way. This is the difference between a
- * subtitle track and something that feels directed.
- * ------------------------------------------------------------------ */
-
-type CapProps = { beat: BeatProps; absFrame: number; fps: number; local: number };
-
-const useSpoken = (word: WordProps, absFrame: number) => {
-  const live = absFrame >= word.startFrame && absFrame <= word.endFrame + 2;
-  const past = absFrame > word.endFrame + 2;
-  return { live, past };
-};
-
-/** 0 — STACK: words rise in, staggered, bottom third. */
-const Stack: React.FC<CapProps> = ({ beat, absFrame, fps, local }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "0 16px", maxWidth: 900 }}>
-    {beat.words.map((word, i) => {
-      const { live, past } = useSpoken(word, absFrame);
-      const enter = spring({ frame: local - i * 2, fps, config: { damping: 14, mass: 0.5 }, durationInFrames: 14 });
-      return (
-        <span key={i} style={{
-          fontSize: 76, fontWeight: 900, letterSpacing: -2.5, lineHeight: 1.1,
-          color: live ? ACCENT : FG, opacity: past ? 0.5 : enter,
-          transform: `translateY(${(1 - enter) * 46}px) scale(${live ? 1.08 : 1})`,
-          textShadow: live ? `0 0 44px ${ACCENT}70, 0 4px 20px #000` : "0 4px 20px #000",
-          display: "inline-block",
-        }}>{word.w}</span>
-      );
-    })}
-  </div>
-);
-
-/** 1 — PUNCH: one huge line, overshoot scale-in, centre of frame. */
-const Punch: React.FC<CapProps> = ({ beat, absFrame, fps, local }) => {
-  const enter = spring({ frame: local, fps, config: { damping: 9, mass: 0.6, stiffness: 140 }, durationInFrames: 18 });
-  return (
-    <div style={{ transform: `scale(${0.62 + enter * 0.38})`, textAlign: "center", maxWidth: 940 }}>
-      {beat.words.map((word, i) => {
-        const { live, past } = useSpoken(word, absFrame);
-        return (
-          <span key={i} style={{
-            fontSize: 96, fontWeight: 900, letterSpacing: -4, lineHeight: 1.0,
-            color: live ? HOT : FG, opacity: past ? 0.62 : 1,
-            textShadow: "0 6px 26px #000", marginRight: 18, display: "inline-block",
-          }}>{word.w}</span>
-        );
-      })}
-    </div>
-  );
-};
-
-/** 2 — SLIDE: left-anchored, accent bar wipes in behind. */
-const Slide: React.FC<CapProps> = ({ beat, absFrame, fps, local }) => {
-  const enter = spring({ frame: local, fps, config: { damping: 200 }, durationInFrames: 12 });
-  return (
-    <div style={{ width: "100%", textAlign: "left", paddingLeft: 20 }}>
-      <div style={{ height: 8, background: ACCENT, width: `${enter * 62}%`, marginBottom: 22, borderRadius: 4 }} />
-      <div style={{ transform: `translateX(${(1 - enter) * -70}px)`, opacity: enter }}>
-        {beat.words.map((word, i) => {
-          const { live, past } = useSpoken(word, absFrame);
-          return (
-            <span key={i} style={{
-              fontSize: 70, fontWeight: 900, letterSpacing: -2, lineHeight: 1.14,
-              color: live ? ACCENT : FG, opacity: past ? 0.5 : 1,
-              textShadow: "0 4px 20px #000", marginRight: 15, display: "inline-block",
-              transform: live ? "translateY(-6px)" : "none",
-            }}>{word.w}</span>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-/** 3 — POP: each word snaps in with its own tilt, scattered baseline.
- *
- * `gap` is generous and the scale range is tight on purpose. A span scaled to
- * 1.12 visually overflows its layout box by ~9px per side, which eats a normal
- * gap and runs the words together — the layout box does not grow with a
- * transform. Horizontal separation therefore comes from padding (which is
- * layout) rather than from gap alone.
- */
-const Pop: React.FC<CapProps> = ({ beat, absFrame, fps }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: "14px 10px", maxWidth: 900 }}>
-    {beat.words.map((word, i) => {
-      const { live, past } = useSpoken(word, absFrame);
-      const pop = spring({ frame: absFrame - word.startFrame, fps, config: { damping: 8, mass: 0.4, stiffness: 200 }, durationInFrames: 12 });
-      const tilt = (random(`t${word.w}${i}`) - 0.5) * 7;
-      return (
-        <span key={i} style={{
-          fontSize: 74, fontWeight: 900, letterSpacing: -2,
-          padding: "0 11px",
-          color: live ? ACCENT : FG, opacity: past ? 0.55 : Math.max(pop, 0.22),
-          transform: `scale(${0.82 + pop * 0.22}) rotate(${tilt}deg) translateY(${(random(`y${i}`) - 0.5) * 9}px)`,
-          textShadow: live ? `0 0 40px ${ACCENT}80, 0 4px 18px #000` : "0 4px 18px #000",
-          display: "inline-block",
-        }}>{word.w}</span>
-      );
-    })}
-  </div>
-);
-
-/** 4 — BANNER: solid accent slab, dark text, wipes open. */
-const Banner: React.FC<CapProps> = ({ beat, absFrame, fps, local }) => {
-  const enter = spring({ frame: local, fps, config: { damping: 200 }, durationInFrames: 11 });
-  return (
-    <div style={{
-      background: ACCENT, padding: "26px 34px", borderRadius: 6, maxWidth: 920,
-      transform: `scaleX(${0.3 + enter * 0.7})`, transformOrigin: "left center", opacity: enter,
-    }}>
-      <div style={{ opacity: interpolate(enter, [0.55, 1], [0, 1], { extrapolateLeft: "clamp" }) }}>
-        {beat.words.map((word, i) => {
-          const { live } = useSpoken(word, absFrame);
-          return (
-            <span key={i} style={{
-              fontSize: 64, fontWeight: 900, letterSpacing: -2, lineHeight: 1.16,
-              color: live ? "#FFFFFF" : INK, marginRight: 14, display: "inline-block",
-              transform: live ? "scale(1.06)" : "none",
-            }}>{word.w}</span>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-const TREATMENTS = [Stack, Punch, Slide, Pop, Banner];
-// Vertical anchor per treatment, so captions don't all sit in the same band.
-const ANCHOR: Array<React.CSSProperties> = [
-  { justifyContent: "flex-end", padding: "0 70px 300px" },
-  { justifyContent: "center", padding: "0 60px" },
-  { justifyContent: "flex-end", padding: "0 70px 340px" },
-  { justifyContent: "center", padding: "0 60px 120px" },
-  { justifyContent: "flex-end", padding: "0 70px 280px" },
-];
-
-const Caption: React.FC<{ beat: BeatProps; index: number; showShotNotes?: boolean }> = ({
-  beat,
-  index,
-  showShotNotes,
-}) => {
-  // Inside a <Sequence>, useCurrentFrame() is ALREADY sequence-relative.
-  // Subtracting startFrame again drives springs negative and pins opacity at 0.
-  const local = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const span = Math.max(beat.endFrame - beat.startFrame, 1);
-  const Treatment = TREATMENTS[index % TREATMENTS.length];
-
-  const out = interpolate(local, [span - 6, span], [1, 0], {
-    extrapolateLeft: "clamp", extrapolateRight: "clamp",
-  });
-
-  return (
-    <AbsoluteFill style={{ alignItems: "center", ...ANCHOR[index % ANCHOR.length], opacity: out }}>
-      <div style={{ fontFamily: FONT, textAlign: "center" }}>
-        <Treatment beat={beat} absFrame={beat.startFrame + local} fps={fps} local={local} />
-        {showShotNotes ? (
-          <div style={{ marginTop: 62, fontSize: 21, fontWeight: 600, color: ACCENT, opacity: 0.7, letterSpacing: 0.4 }}>
-            {beat.shot || beat.show}
-          </div>
-        ) : null}
-      </div>
-    </AbsoluteFill>
   );
 };
 
@@ -328,6 +135,9 @@ export const AdVideo: React.FC<AdVideoProps> = ({
         <Grade />
       </AbsoluteFill>
 
+      {/* Constant, so the band never flashes in the silence between beats. */}
+      <CaptionScrim />
+
       {hookFrames > 2 ? (
         <Sequence durationInFrames={hookFrames}>
           <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", padding: 74 }}>
@@ -342,7 +152,7 @@ export const AdVideo: React.FC<AdVideoProps> = ({
 
       {beats.map((beat, i) => (
         <Sequence key={i} from={beat.startFrame} durationInFrames={Math.max(beat.endFrame - beat.startFrame, 1)}>
-          <Caption beat={beat} index={i} showShotNotes={showShotNotes} />
+          <Caption beat={beat} showShotNotes={showShotNotes} />
         </Sequence>
       ))}
 

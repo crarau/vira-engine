@@ -1,0 +1,104 @@
+{
+  "$comment": "Contract for the Lovable-hosted judge page. Panellists arrive here from Terac. The Python console at console.ideaplaces.com is internal and must not be shown to them; this page replaces it. Everything below is live and callable today.",
+
+  "api_base": "https://vira.ideaplaces.com",
+  "auth": "none — the batch token IS the credential. Do not add a login.",
+
+  "route_to_build": {
+    "path": "/judge/:token",
+    "example": "https://<your-lovable-app>/judge/aQ7xgb94xtOMuvJ9QrjTOV3USkUQuCrr",
+    "public": true,
+    "audience": "paid panellists on a phone, 3 minutes, no account",
+    "note": "Once this exists, tell Chip the base URL. VIRA_JUDGE_BASE_URL on the API is set to it, and every future batch's judge_url points here automatically."
+  },
+
+  "step_1_load": {
+    "method": "GET",
+    "url": "{api_base}/v1/review-batches/{token}",
+    "returns_example": {
+      "title": "Which sunscreen ad would stop your scroll?",
+      "videos": [
+        {
+          "video_id": "42bc9002-f1e3-4d65-b80d-da4a43544754",
+          "position": 1,
+          "hook": "White cast again. This is why I stopped wearing mineral SPF.",
+          "duration_s": 24.0,
+          "mp4_url": "https://vira.ideaplaces.com/media/overcast/v005/problem-first/overcast-problem-first.mp4"
+        }
+      ]
+    },
+    "notes": [
+      "Render videos in `position` order. Every panellist must see the same order or the ranking is not comparable.",
+      "mp4_url is absolute, CORS-open, supports HTTP Range so scrubbing works. Serve it directly in a <video> tag.",
+      "Files are 10-20MB for ~25s. Do not preload all five; load the current one.",
+      "404 means an unknown or expired token — say so plainly rather than showing an error page."
+    ]
+  },
+
+  "step_2_identify_the_reviewer": {
+    "why": "This is the single most important detail. Terac appends a query parameter identifying the participant. Send it back as reviewer_ref or their votes cannot be reconciled and the panel spend is wasted.",
+    "rule": [
+      "Read `teracSubmissionId` from the query string.",
+      "If absent, fall back to `submissionId` — Terac appends both and they are not always the same.",
+      "reviewer_ref = 'terac:' + that value.  e.g. 'terac:abc123'",
+      "If neither is present (someone opened the link directly), generate a UUID once, persist it in localStorage, and use 'anon:' + uuid so the two are distinguishable in the data."
+    ],
+    "do_not": "Never invent a reviewer_ref per page load. A reload must be the same person or one panellist counts as several."
+  },
+
+  "step_3_submit_a_vote": {
+    "method": "POST",
+    "url": "{api_base}/v1/review-batches/{token}/votes",
+    "body": {
+      "reviewer_ref": "terac:abc123",
+      "video_id": "42bc9002-f1e3-4d65-b80d-da4a43544754",
+      "rating": 4,
+      "picked": false,
+      "comment": "The first two seconds actually made me stop."
+    },
+    "field_rules": {
+      "rating": "REQUIRED, integer 1-5. The API rejects a vote without it, so a comment or a pick alone cannot be posted — hold them in local state until a rating exists.",
+      "picked": "boolean. The one ad they would genuinely stop scrolling for. At most one true per reviewer; enforce that client-side.",
+      "comment": "optional free text, one sentence is plenty"
+    },
+    "notes": [
+      "POST as each answer is given, not once at the end. Panellists close tabs; a batched submit loses everything.",
+      "The API upserts on (batch, video, reviewer). Re-voting EDITS the earlier answer, it does not double count — so re-submitting is safe and should be described to the user as 'this replaced your earlier answer'.",
+      "Debounce the comment field ~900ms and flush on blur and on pagehide."
+    ]
+  },
+
+  "what_must_never_appear": {
+    "fields": ["score", "score_breakdown", "disposition", "drop_reason", "lane"],
+    "why": "The engine grades every ad itself. Showing a human that grade first anchors them to it and destroys the independent signal we are paying for. The API already omits these from the judge payload — do not fetch them from any other endpoint to fill the page out.",
+    "also": "Do not label the videos with their creative angle. 'founder story' and 'contrarian' carry their own pull and would bias the ranking toward a name rather than the film."
+  },
+
+  "the_experience": {
+    "must": [
+      "Mobile first. Vertical 9:16 video, sized so the rating controls are reachable with a thumb.",
+      "One video at a time, with progress: '2 of 5'.",
+      "No autoplay with sound. Tap to play.",
+      "Show saved state per video so a reload does not look like lost work.",
+      "A finish screen naming their pick."
+    ],
+    "handle": [
+      "unknown token",
+      "an mp4 that fails to load — offer to skip rather than trapping them",
+      "a reload mid-way — restore answered state locally",
+      "someone rating the same ad twice — say it replaced the earlier answer"
+    ]
+  },
+
+  "results_are_not_public": {
+    "endpoint": "GET {api_base}/v1/review-batches/{batch_id}/results",
+    "note": "Keyed by the internal batch UUID, NOT the public token, deliberately. Holding the judge link does not hand you the running tally. This endpoint is for us, not for the page you are building."
+  },
+
+  "live_test_data": {
+    "token": "aQ7xgb94xtOMuvJ9QrjTOV3USkUQuCrr",
+    "batch_id": "284fa35a-3e46-44e6-aeee-91964682b182",
+    "try_it": "curl https://vira.ideaplaces.com/v1/review-batches/aQ7xgb94xtOMuvJ9QrjTOV3USkUQuCrr",
+    "reference_implementation": "ui/app/judge/[token]/page.tsx in the vira-engine repo — same contract, plain React, copy freely"
+  }
+}
