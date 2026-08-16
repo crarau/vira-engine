@@ -1,107 +1,36 @@
 [Unit]
-Description=vira-engine API (uvicorn)
-Documentation=https://github.com/crarau/vira-engine
-# Postgres comes up under docker, so we want docker to have settled first.
-# This is ordering, not a guarantee: the API must still tolerate a database
-# that is not accepting connections yet, because docker.service being "up"
-# says nothing about the container inside it being ready.
+Description=Vira engine API
 After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
-Type=exec
+Type=notify
 User=chipdev
-Group=chipdev
 WorkingDirectory=/home/chipdev/vira-engine
+EnvironmentFile=/home/chipdev/vira-engine/.env
 
-# Gitignored, mode 0600, written by deploy/setup.sh. Holds DATABASE_URL and
-# every API key. systemd reads it as literal KEY=VALUE — no shell, no
-# expansion, no quotes stripped beyond the first level.
-EnvironmentFile=/home/chipdev/vira-engine/deploy/vira-api.env
+# Remotion shells out to npx, and a systemd service inherits none of nvm's
+# setup — without this the API returns 202 and then dies at render time with
+# "npx: not found", which looks like a video bug rather than a PATH bug.
+Environment=PATH=/home/chipdev/.nvm/versions/node/v20.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Remotion shells out to npx and to a headless Chrome that it caches under
-# $HOME. A systemd service gets a near-empty PATH, so without this the render
-# stage fails with "npx: not found" *after* the job has already been accepted
-# and returned 202 — the worst possible place to discover it. setup.sh writes
-# a drop-in at 10-node-path.conf with the real node bin directory resolved on
-# the box; this line is the floor it falls back to.
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=HOME=/home/chipdev
-Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/chipdev/vira-engine/.venv312/bin/gunicorn vira.api.app:app \
+  -c /home/chipdev/vira-engine/deploy/gunicorn.conf.py
 
-# --- worker count -----------------------------------------------------------
-#
-# 2, on a 32-core box. The instinct is 2*cores+1; that instinct is for an API
-# whose workers are the only thing on the machine. Here they are not.
-#
-# The scarce resource is cores for Remotion, not cores for HTTP. A single ad
-# render already runs at --concurrency 6, and render_remote.py drives five of
-# them at once precisely because 5 x 6 = 30 is what this box fits. The HTTP
-# layer's actual job is tiny: accept a request, write a job row, return 202,
-# and later stream an mp4 off disk. That is I/O, and asyncio handles it in one
-# process without breaking a sweat.
-#
-# The failure mode that decides the number: every uvicorn worker is a separate
-# Python process with its own memory. A render semaphore sized to the machine
-# is sized *per process*. Four workers each holding a semaphore(5) is twenty
-# concurrent renders on a box that fits five — the machine thrashes, every
-# render slows down, and nothing in the code looks wrong. More workers here
-# does not buy throughput, it buys oversubscription.
-#
-# So why not 1? Because one worker is one process: a single accidental
-# blocking call (a sync DB driver, a subprocess.run someone forgot to thread)
-# stalls the event loop, and /health stops answering while renders are
-# perfectly fine. Two workers means the liveness check and /media downloads
-# survive one wedged worker, at the cost of one duplicated process.
-#
-# Requirement that comes with 2: shared state must live in Postgres, not in a
-# module-level dict. Job claiming needs SELECT ... FOR UPDATE SKIP LOCKED (or
-# equivalent), otherwise both workers pick up the same job. If the API turns
-# out to keep its queue in process memory, drop this to 1 and revisit — a
-# correct single worker beats two workers racing each other.
-ExecStart=/home/chipdev/vira-engine/.venv/bin/uvicorn vira.api.app:app \
-    --host 127.0.0.1 \
-    --port 8720 \
-    --workers 2 \
-    --timeout-keep-alive 75 \
-    --proxy-headers \
-    --forwarded-allow-ips 127.0.0.1 \
-    --log-level info
+# The whole point of the reload: SIGHUP starts workers on new code and retires
+# the old ones only once their in-flight jobs finish. `systemctl reload` is
+# therefore zero-downtime; `restart` is not, and should be reserved for a
+# config change gunicorn cannot pick up.
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGTERM
 
-# 127.0.0.1 above is load-bearing and is the whole security model. cloudflared
-# runs on this box and dials the loopback port; nothing else can reach it.
-# Binding 0.0.0.0 would publish an unauthenticated API straight onto a public
-# IP and make the tunnel — and its TLS — optional.
-#
-# --proxy-headers with --forwarded-allow-ips 127.0.0.1 is what lets the app see
-# the real client IP and the public hostname: cloudflared always connects from
-# loopback, so trusting X-Forwarded-* from loopback and nowhere else is exactly
-# right here. Absolute URLs the API returns (a /media link most of all) must be
-# built from the forwarded host, not from the socket it was served on.
-
+# Generation is a background task running 90-350s. Give it room to drain rather
+# than killing work someone is waiting on.
+TimeoutStopSec=600
 Restart=always
-RestartSec=3
-# A render in flight can take minutes. Give the process time to finish writing
-# an mp4 before SIGKILL, otherwise every deploy leaves truncated files in out/.
-TimeoutStopSec=180
-KillMode=mixed
-# Renders are children of this unit, so the default control-group kill takes
-# them with it on stop. That is intended: a half-rendered orphan holding six
-# cores after the API is gone is worse than a lost job.
-
-# Remotion downloads and runs a headless Chrome. ProtectSystem=strict,
-# PrivateTmp, and the usual sandbox set break it in ways that surface as a
-# blank video rather than an error (see docs/BUILD-LOG.md finding 4), so the
-# hardening here stops at the two flags that cost nothing.
+RestartSec=5
 NoNewPrivileges=true
-PrivateDevices=false
-# Chrome opens a lot of files; the default 1024 is not enough alongside two
-# uvicorn workers streaming media.
 LimitNOFILE=65535
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=vira-api
 
 [Install]
 WantedBy=multi-user.target

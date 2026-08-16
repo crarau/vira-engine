@@ -78,7 +78,7 @@ async def build_variant(
             company=company, product=product, remix=remix, score=score, sources=picked,
             voice_id=s.elevenlabs_voice_id,
             settings_snapshot={
-                "llm_model": s.llm_model,
+                "llm_model": s.agent_model,
                 "max_age_days": s.max_age_days,
                 "shortlist_size": s.shortlist_size,
                 "max_per_format": s.max_per_format,

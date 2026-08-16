@@ -82,6 +82,17 @@ REMOTE_SCRIPT
 blue "==> reloading the API (no downtime)"
 ssh "$HOST" "bash -s" <<REMOTE_SCRIPT
 set -uo pipefail
+# systemd owns the process now. A backgrounded ssh command does not survive the
+# session closing, which is how a stale pre-Azure uvicorn kept port 8720 while a
+# publish reported success — the health check was answered by the OLD process.
+sudo systemctl reload-or-restart vira-api
+for i in \$(seq 1 40); do
+  curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0
+  sleep 2
+done
+echo "LOCAL HEALTHCHECK FAILED"; sudo journalctl -u vira-api -n 30 --no-pager; exit 1
+REMOTE_SCRIPT
+set -uo pipefail
 cd $REMOTE
 set -a; . ./.env; set +a
 
@@ -91,9 +102,18 @@ if [ -n "\$PID" ] && kill -0 "\$PID" 2>/dev/null; then
   kill -HUP "\$PID"
 else
   echo "    nothing running, cold start"
-  # setsid: without it the master dies with this ssh session.
-  pkill -f "gunicorn.*vira.api.app" 2>/dev/null || true
-  sleep 1
+  # Kill BOTH runtimes. A legacy `uvicorn vira.api.app` does not match a
+  # gunicorn pattern, so an old process kept port 8720, gunicorn failed to bind
+  # and died, and the health check passed because the STALE process answered it
+  # — a publish that reported success while serving month-old code.
+  pkill -f "vira.api.app" 2>/dev/null || true
+  for i in $(seq 1 10); do
+    ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN || break
+    sleep 1
+  done
+  if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN; then
+    echo "    port $PORT still held after 10s"; exit 1
+  fi
   setsid nohup ./.venv312/bin/gunicorn vira.api.app:app \
     -c deploy/gunicorn.conf.py > /tmp/vira-api.log 2>&1 < /dev/null &
   disown 2>/dev/null || true
@@ -108,8 +128,7 @@ REMOTE_SCRIPT
 
 if [[ $? -ne 0 ]]; then
   red "==> new commit will not start. Rolling back to $PREV_SHA"
-  ssh "$HOST" "cd $REMOTE && git reset -q --hard $PREV_SHA && \
-    kill -HUP \$(cat /tmp/vira-api.pid) 2>/dev/null || true"
+  ssh "$HOST" "cd $REMOTE && git reset -q --hard $PREV_SHA && sudo systemctl reload-or-restart vira-api"
   exit 1
 fi
 
@@ -117,6 +136,10 @@ blue "==> verifying through the tunnel"
 sleep 3
 for i in {1..10}; do
   if curl -sf -o /dev/null -m 15 "$PUBLIC/healthz"; then
+    SERVED=$(ssh "$HOST" "cd $REMOTE && git rev-parse --short HEAD" 2>/dev/null)
+    if [ "$SERVED" != "$LOCAL_SHA" ]; then
+      red "    box reports $SERVED but we shipped $LOCAL_SHA"; exit 1
+    fi
     green "    $PUBLIC is serving $LOCAL_SHA"
     curl -s -m 15 "$PUBLIC/v1/corpus/stats" \
       | python3 -c 'import json,sys;d=json.load(sys.stdin);print(f"    corpus: {d[\"trends_total\"]} trends, {d[\"companies\"]} companies")' 2>/dev/null || true

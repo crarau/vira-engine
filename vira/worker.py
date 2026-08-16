@@ -160,7 +160,7 @@ async def main() -> None:
     s = settings()
     log.info(
         "vira worker up · tick %ss · model %s · dry_run=%s",
-        TICK_SECONDS, s.llm_model, DRY_RUN,
+        TICK_SECONDS, s.agent_model, DRY_RUN,
     )
     while True:
         try:

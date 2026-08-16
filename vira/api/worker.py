@@ -326,7 +326,7 @@ async def _produce(
             shots=shots, sources=picked, voice_id=lane.voice_id,
             settings_snapshot={
                 "mode": mode,
-                "llm_model": s.llm_model,
+                "llm_model": s.agent_model,
                 "agent_model": s.agent_model if mode == "agentic" else None,
                 "image_model": s.image_model,
                 "max_age_days": s.max_age_days,
