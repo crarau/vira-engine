@@ -75,10 +75,10 @@ docker exec -i vira-pg psql -q -U vira -d vira -v ON_ERROR_STOP=1 < sql/schema.s
 REMOTE_SCRIPT
 
 # --- 3. reload and verify ---------------------------------------------------
-# SIGHUP, not restart. The team is using this URL and a generation runs for
-# minutes; killing the process throws away work someone is waiting on. Gunicorn
-# starts workers on the new code and retires the old ones only once they are
-# idle. Falls back to a cold start if nothing is running yet.
+# Reload, not restart. The team is using this URL and a generation runs for
+# minutes as a background task; killing the process throws away work someone is
+# waiting on. systemd's ExecReload is SIGHUP, so gunicorn starts workers on the
+# new code and retires the old ones only once their jobs finish.
 blue "==> reloading the API (no downtime)"
 ssh "$HOST" "bash -s" <<REMOTE_SCRIPT
 set -uo pipefail
@@ -92,32 +92,6 @@ for i in \$(seq 1 40); do
 done
 echo "LOCAL HEALTHCHECK FAILED"; sudo journalctl -u vira-api -n 30 --no-pager; exit 1
 REMOTE_SCRIPT
-set -uo pipefail
-cd $REMOTE
-set -a; . ./.env; set +a
-
-PID=\$(cat /tmp/vira-api.pid 2>/dev/null || true)
-if [ -n "\$PID" ] && kill -0 "\$PID" 2>/dev/null; then
-  echo "    HUP -> \$PID (in-flight jobs keep running on the old workers)"
-  kill -HUP "\$PID"
-else
-  echo "    nothing running, cold start"
-  # Kill BOTH runtimes. A legacy `uvicorn vira.api.app` does not match a
-  # gunicorn pattern, so an old process kept port 8720, gunicorn failed to bind
-  # and died, and the health check passed because the STALE process answered it
-  # — a publish that reported success while serving month-old code.
-  pkill -f "vira.api.app" 2>/dev/null || true
-  for i in $(seq 1 10); do
-    ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN || break
-    sleep 1
-  done
-  if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN; then
-    echo "    port $PORT still held after 10s"; exit 1
-  fi
-  setsid nohup ./.venv312/bin/gunicorn vira.api.app:app \
-    -c deploy/gunicorn.conf.py > /tmp/vira-api.log 2>&1 < /dev/null &
-  disown 2>/dev/null || true
-fi
 
 for i in \$(seq 1 40); do
   curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0
