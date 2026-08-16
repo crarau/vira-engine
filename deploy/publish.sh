@@ -79,30 +79,21 @@ REMOTE_SCRIPT
 # minutes as a background task; killing the process throws away work someone is
 # waiting on. systemd's ExecReload is SIGHUP, so gunicorn starts workers on the
 # new code and retires the old ones only once their jobs finish.
+#
+# systemd also owns the lifecycle because a backgrounded ssh command does not
+# survive the session closing — that is how a stale pre-Azure uvicorn held the
+# port for an hour while publish reported success, the health check answered by
+# the OLD process.
 blue "==> reloading the API (no downtime)"
-ssh "$HOST" "bash -s" <<REMOTE_SCRIPT
-set -uo pipefail
-# systemd owns the process now. A backgrounded ssh command does not survive the
-# session closing, which is how a stale pre-Azure uvicorn kept port 8720 while a
-# publish reported success — the health check was answered by the OLD process.
-sudo systemctl reload-or-restart vira-api
-for i in \$(seq 1 40); do
-  curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0
-  sleep 2
-done
-echo "LOCAL HEALTHCHECK FAILED"; sudo journalctl -u vira-api -n 30 --no-pager; exit 1
-REMOTE_SCRIPT
-
-for i in \$(seq 1 40); do
-  curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0
-  sleep 2
-done
-echo "LOCAL HEALTHCHECK FAILED"; tail -30 /tmp/vira-api.log; exit 1
-REMOTE_SCRIPT
-
-if [[ $? -ne 0 ]]; then
-  red "==> new commit will not start. Rolling back to $PREV_SHA"
-  ssh "$HOST" "cd $REMOTE && git reset -q --hard $PREV_SHA && sudo systemctl reload-or-restart vira-api"
+if ! ssh "$HOST" "sudo systemctl reload-or-restart vira-api && \
+  for i in \$(seq 1 40); do \
+    curl -sf -o /dev/null -m 2 http://127.0.0.1:$PORT/healthz && exit 0; \
+    sleep 2; \
+  done; \
+  echo FAILED; sudo journalctl -u vira-api -n 30 --no-pager; exit 1"; then
+  red "==> new commit will not serve. Rolling back to $PREV_SHA"
+  ssh "$HOST" "cd \$HOME/vira-engine && git reset -q --hard $PREV_SHA && \
+    sudo systemctl reload-or-restart vira-api"
   exit 1
 fi
 
