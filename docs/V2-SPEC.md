@@ -35,7 +35,27 @@ So "is the corpus useful?" splits into two questions with different answers:
 | | Useful? |
 |---|---|
 | As **evidence for product claims** | **No, and it never can be.** A stranger's video knows nothing about your product. This was a category error in V1's design, not a retrieval bug to be fixed. |
-| As **reference for format** — what hooks, pacing and structure perform in a vertical | **Yes, genuinely.** The hook-grammar rules in `HOOK-CRAFT.md` came from 2,669 ranked videos and are the most defensible thing in the prototype. |
+| As **reference for format** — what hooks, pacing and structure perform in a vertical | It **was**, and it has already been spent. |
+
+### Decision: nothing migrates from Lovable
+
+The corpus does not come along. Not the rows, not the embeddings, not a seed
+file — V2 never reads Lovable Cloud, and there is no import step to get wrong
+later.
+
+This is defensible because **the value has already been extracted.** The 2,669
+ranked videos produced fourteen prescriptive hook rules, seven permitted opening
+grammars, and a set of measured failure modes — and those now live in
+`vira/remix.py`, `vira/director.py::HOOK_SHAPES` and `docs/HOOK-CRAFT.md` as
+code and prose. **The rules are the extract; the rows were the ore.** Keeping
+4,617 TikTok rows around to re-derive conclusions we already hold would be
+carrying the ore after smelting it.
+
+What that costs, stated plainly: we lose the ability to show a user *"here are
+three real videos shaped like the one we just made for you."* That is a real
+feature and it is not in V1. When it matters, it comes back as a live per-prompt
+search (§8), which is better than the snapshot anyway — current instead of
+frozen, and specific to the request instead of to a category.
 
 ### The fix: split the gate in two
 
@@ -56,8 +76,9 @@ content of their product is on their product page — so the gate finally passes
 things while still refusing to invent. And format guidance stops being a gate it
 was never suited to be.
 
-**The corpus therefore stays, in a reduced and honest role: format reference
-only.** No claim ever cites a TikTok again.
+So the format gate is not a retrieval problem at all in V1 — it is
+`hook_faults()` plus the lane's brief, both already written, both needing no
+data. **No claim ever cites a TikTok again, and no TikTok is stored.**
 
 ## 3. V1 scope — deliberately one shot
 
@@ -100,10 +121,10 @@ dependencies is not a rewrite.
 | `vira/api/routes/terac.py` | Hackathon sponsor integration |
 | `vira/select.py` | Replaced by §6 retrieval. Its rejection-counting is worth keeping in spirit. |
 
-Nineteen files import `Supa` today. Most only need the *shape* of a corpus row,
-so the cut is: **one owned Postgres, one `references` table, and a loader that
-imports the 4,617 rows once as a seed** — after which nothing calls Lovable
-again.
+Nineteen files import `Supa` today. With no corpus to carry, the cut is simply
+**delete `supa.py`, delete the modules above, and keep the one Postgres we
+already own** for generations, videos and recipes. There is no seed step, no
+loader, and no embedding index to build or keep aligned.
 
 ## 5. Architecture
 
@@ -172,15 +193,15 @@ for extractable facts. V1: `httpx` + `readability`/`trafilatura`. V2: Firecrawl
 (§8). Each fact keeps its source URL and the sentence it came from, so a
 recipe can show the provenance of every number in the script.
 
-**b. Format references.** Vector search over the seeded corpus using the
-*prompt and product*, not a category id. `trends.embedding` is already 100%
-populated — 4,617 vectors with an HNSW index — which is why this is buildable
-now and was not in the prototype. Top-k by cosine similarity, then the existing
-`verify_all` still confirms each is live before it reaches a model.
+**b. Format guidance — no retrieval.** There is nothing to retrieve. The lane
+supplies the visual grade and copy brief, `HOOK_SHAPES` supplies the opening
+grammar, and `hook_faults()` audits the result against the fourteen measured
+rules. All three are code. This stage is therefore *one* network fan-out — the
+user's URLs — not two.
 
-This is the single highest-value change in the document. It is the difference
-between "every ad in this category" and "the ads that resemble what you are
-actually trying to make."
+That is a simplification with teeth: GROUND now fails only if the user gave us a
+URL we could not read, which is a condition we can explain to them. V1's
+grounding could fail silently by retrieving 300 irrelevant rows.
 
 ### Stage 5 — CLAIM GATE (rebuilt)
 
@@ -234,12 +255,6 @@ claims (
   fact_id uuid null, verdict text  -- kept|cut, with reason
 )
 
-references_ (                      -- the seeded corpus, format only
-  id uuid pk, url text, platform text, category text,
-  views bigint, er numeric, first_sentence text,
-  embedding vector(1536), posted_at
-)
-
 llm_calls, assets, recipes         -- carried over unchanged
 ```
 
@@ -278,13 +293,13 @@ class PageReader(Protocol):          # the user's own material
 # V1: httpx + trafilatura.  V2: FirecrawlReader — JS rendering, structured
 # extraction, and it handles the Shopify/Squarespace pages that defeat readability.
 
-class ReferenceSource(Protocol):     # format references
+class ReferenceSource(Protocol):     # format references — NOT IMPLEMENTED IN V1
     async def search(self, query: str, *, limit: int) -> list[Reference]: ...
-# V1: SeededCorpus (vector search over the 4,617 imported rows — static, ages).
-# V2: ApifyReferenceSource — live TikTok/IG scrape per query. This is what makes
-# format guidance current instead of a 2026 snapshot, and it is the honest answer
-# to "the corpus is just random scraping": scrape on demand, for this prompt,
-# rather than once, for everything.
+# There is no V1 implementation, by choice: the corpus did not migrate (§2) and
+# the measured rules cover the same ground without any data. When live reference
+# *examples* become worth showing a user, ApifyReferenceSource fills this in with
+# a per-prompt TikTok/IG search — which is the honest version of "scraping":
+# on demand, for this request, rather than once, for everything.
 ```
 
 Cost note before committing: Apify bills per compute unit and a TikTok search
@@ -331,11 +346,11 @@ The prototype's genuinely good parts, none of which need rework:
 
 | | | Ships |
 |---|---|---|
-| **0** | New repo under `Ideaplaces`, own Postgres, seed the 4,617 references once, delete `supa.py` and the six dead route modules | nothing user-visible; the dependency is severed |
+| **0** | New repo under `Ideaplaces`, own Postgres, delete `supa.py` and the six dead route modules. No data migrates. | nothing user-visible; the dependency is severed |
 | **1** | UNDERSTAND + GROUND(user URLs) + the claim gate, wired to the existing render path. CLI only. | a video from a sentence |
 | **2** | `POST /v1/generations` + SSE + the web page: one input, live progress, a player | **the demo** |
 | **3** | The edit loop — reword a beat, regenerate a frame, versions, revert | the product |
-| **4** | Vector reference retrieval, the cut-claims panel, `missing` prompts | trust and quality |
+| **4** | The cut-claims panel, `missing` prompts, richer fact extraction | trust and quality |
 | **5** | Firecrawl, then Apify, behind the §8 protocols | current, not snapshotted |
 
 Phases 1–3 are the prototype-to-product line. 0 is a day. 4 onward is polish
@@ -344,12 +359,12 @@ with real leverage.
 ## 12. Decisions needed from Chip
 
 1. **Name and repo.** Everything else can start; this blocks phase 0.
-2. **Does the corpus come along at all?** §2 argues yes, as format reference
-   only, seeded once. The alternative — drop it entirely and rely on the hook
-   rules already distilled from it — is defensible and simpler. The rules are
-   the extract; the rows are the ore.
-3. **Firecrawl or plain fetching for V1?** Plain `httpx` + `trafilatura` handles
-   maybe 70% of product pages and costs nothing. Firecrawl handles the rest.
+2. ~~**Does the corpus come along?**~~ **Decided: no.** Nothing migrates from
+   Lovable. See §2.
+3. ~~**Firecrawl or plain fetching for V1?**~~ **Decided: `trafilatura`.**
+   Faster, free, no account, no rate limit, and it handles the majority of
+   product pages. Firecrawl stays behind the `PageReader` protocol for the pages
+   it cannot parse.
 4. **Is a login needed before this is shown to anyone?** Generation costs real
    money per call, and an open box on the internet is a different risk from an
-   open box during a hackathon.
+   open box during a hackathon. **This is the only open question left.**

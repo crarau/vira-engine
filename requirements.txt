@@ -17,3 +17,8 @@ gunicorn==23.0.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 respx==0.23.1
+
+# Reads the user's own product pages — the only source a claim may cite
+# (vira/reader.py). Chosen over Firecrawl for V1: local, free, no account, no
+# rate limit. Firecrawl stays behind the PageReader protocol for JS-only pages.
+trafilatura==2.2.0
