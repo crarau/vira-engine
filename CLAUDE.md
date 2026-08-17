@@ -165,3 +165,31 @@ render_remote.py  offload rendering to chipdev
 
 Output is versioned: `out/<slug>/v<NNN>-<timestamp>/`, with `latest` symlinked
 to the newest. Never overwrite a previous run.
+
+## Design tokens
+
+Style guide source: Styleguide conversation `1fc85745-6499-4412-bd76-cbd6a9c119c4`,
+version 3 / `c8c1c195-ea40-4379-b9fc-13fb7099b4da`, palette **Forensic Teal**,
+selected 2026-08-17. Generated via `/styleguide-generate` against
+`styleguide.ideaplaces.com/api/v1`.
+
+Chosen over the other three because they all used a blue primary — the SaaS
+default — while deep teal is the near-complement of the render accent `#F5C518`,
+so the web UI and the video frames read as one system. Its state language
+(copper vs moss) also carries kept-versus-cut without green/red form validation.
+
+Files: `design/{tokens.json,variables.css,tailwind.config.js,colors.ts}` and
+`docs/style-guide.html` (standalone preview). `tokens.json` is the source the
+other formats re-derive from.
+
+**Two hand-written additions live at the bottom of `design/variables.css` and are
+NOT in the export — re-apply them after any regenerate:**
+
+1. **Dark tokens.** The bundle ships light only. `#0F6B6D` on the dark ground
+   measures **2.95:1**, so the dark primary is raised to `#2E9B9D` (5.54:1).
+   Full parity: 18 colour tokens in each theme.
+2. **Render tokens** (`--render-*`). The video palette is fixed in
+   `video/src/Captions.tsx` and `AdVideo.tsx` and is deliberately **not**
+   theme-aware — an exported mp4 has one appearance forever.
+
+Fonts are Inter + IBM Plex Mono, both freely licensed. No substitution needed.

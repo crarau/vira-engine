@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence First Brand Guide Style Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Inter:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: Inter, Arial, sans-serif; font-weight: 400; line-height: 1.6; color: #1D2326; background: #F2EFE8; }
+h1, h2, h3 { font-family: Inter, Arial, sans-serif; font-weight: 700; line-height: 1.2; }
+.container { max-width: 960px; margin: 0 auto; padding: 0 32px; }
+.section { padding: 64px 0; }
+.section-alt { background: #E7E1D7; }
+.section-title { font-size: 28px; margin-bottom: 32px; }
+.section-subtitle { font-size: 14px; color: #6B7280; margin-bottom: 24px; }
+
+/* Cover */
+.cover { padding: 80px 0; background: linear-gradient(135deg, #0F6B6D, #6E7758); color: white; text-align: center; }
+.cover h1 { font-size: 48px; margin-bottom: 8px; }
+.cover .palette-name { font-size: 20px; opacity: 0.85; margin-bottom: 16px; }
+.cover .desc { font-size: 16px; opacity: 0.7; max-width: 600px; margin: 0 auto; }
+
+/* Color swatches */
+.color-group { margin-bottom: 32px; }
+.color-group h3 { font-size: 18px; margin-bottom: 16px; color: #374151; }
+.swatches { display: flex; flex-wrap: wrap; gap: 16px; }
+.swatch { display: flex; align-items: center; gap: 12px; min-width: 200px; }
+.swatch-box { width: 48px; height: 48px; border-radius: 8px; border: 1px solid #CBC4B8; flex-shrink: 0; }
+.swatch-info { font-size: 13px; }
+.swatch-hex { font-family: IBM Plex Mono, monospace; font-size: 12px; color: #6B7280; }
+.swatch-desc { font-size: 11px; color: #9CA3AF; }
+
+/* Typography */
+.type-specimen { margin-bottom: 24px; padding: 24px; background: #FAF8F3; border: 1px solid #CBC4B8; border-radius: 8px; }
+.type-scale { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+.type-scale-item { padding: 8px 16px; background: #E7E1D7; border-radius: 8px; }
+
+/* Spacing */
+.spacing-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.spacing-box { background: #0F6B6D20; border: 1px solid #0F6B6D40; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #0F6B6D; font-family: IBM Plex Mono, monospace; }
+.shadow-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.shadow-card { padding: 24px; background: #FAF8F3; border-radius: 8px; text-align: center; font-size: 12px; color: #6B7280; }
+
+/* Components */
+.component-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+.btn { display: inline-flex; align-items: center; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; border: none; cursor: pointer; font-family: inherit; }
+.btn-primary { background: #0F6B6D; color: white; }
+.btn-secondary { background: #6E7758; color: white; }
+.btn-outline { background: transparent; border: 1px solid #CBC4B8; color: #1D2326; }
+.btn-ghost { background: transparent; color: #1D2326; }
+.btn-destructive { background: #9A6046; color: white; }
+.input-field { padding: 10px 14px; border: 1px solid #CBC4B8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #F2EFE8; color: #1D2326; width: 240px; }
+.card-demo { padding: 20px; background: #FAF8F3; border: 1px solid #CBC4B8; border-radius: 8px; }
+.badge { display: inline-flex; padding: 2px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+
+/* Contrast */
+.contrast-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.contrast-item { padding: 16px; border-radius: 8px; border: 1px solid #CBC4B8; }
+.contrast-ratio { font-size: 24px; font-weight: 700; font-family: IBM Plex Mono, monospace; }
+.contrast-pass { color: #5E765B; }
+.contrast-fail { color: #9A6046; }
+</style>
+</head>
+<body>
+
+<!-- Cover -->
+<div class="cover">
+  <div class="container">
+    <h1>Evidence First Brand Guide</h1>
+    <div class="palette-name">Forensic Teal</div>
+    <div class="desc">A cleaner technical palette pairing warm greige neutrals with assertive deep teal and copper editorial highlights.</div>
+  </div>
+</div>
+
+<!-- Colors -->
+<div class="section">
+  <div class="container">
+    <h2 class="section-title">Colors</h2>
+    <p class="section-subtitle">Deep teal suggests measured intelligence and trust without falling into generic enterprise blue. The warm-biased neutrals keep the product human and readable, while copper and muted moss create a strong but sophisticated visual language for unsupported versus sourced claims.</p>
+    
+    <div class="color-group">
+      <h3>Core Colors</h3>
+      <div class="swatches">
+        
+        <div class="swatch">
+          <div class="swatch-box" style="background: #0F6B6D"></div>
+          <div class="swatch-info">
+            <div>Primary</div>
+            <div class="swatch-hex">#0F6B6D</div>
+            <div class="swatch-desc">Main brand color, CTAs</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #3F8C8D"></div>
+          <div class="swatch-info">
+            <div>Primary Light</div>
+            <div class="swatch-hex">#3F8C8D</div>
+            <div class="swatch-desc">Hover backgrounds</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #0C5658"></div>
+          <div class="swatch-info">
+            <div>Primary Dark</div>
+            <div class="swatch-hex">#0C5658</div>
+            <div class="swatch-desc">Pressed states</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #6E7758"></div>
+          <div class="swatch-info">
+            <div>Secondary</div>
+            <div class="swatch-hex">#6E7758</div>
+            <div class="swatch-desc">Supporting elements</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #C06C3D"></div>
+          <div class="swatch-info">
+            <div>Accent</div>
+            <div class="swatch-hex">#C06C3D</div>
+            <div class="swatch-desc">Highlights, badges</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="color-group">
+      <h3>Neutral Colors</h3>
+      <div class="swatches">
+        
+        <div class="swatch">
+          <div class="swatch-box" style="background: #F2EFE8"></div>
+          <div class="swatch-info">
+            <div>Background</div>
+            <div class="swatch-hex">#F2EFE8</div>
+            <div class="swatch-desc">Page background</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #FAF8F3"></div>
+          <div class="swatch-info">
+            <div>Surface</div>
+            <div class="swatch-hex">#FAF8F3</div>
+            <div class="swatch-desc">Cards, modals</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #1D2326"></div>
+          <div class="swatch-info">
+            <div>Foreground</div>
+            <div class="swatch-hex">#1D2326</div>
+            <div class="swatch-desc">Primary text</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #707873"></div>
+          <div class="swatch-info">
+            <div>Foreground Muted</div>
+            <div class="swatch-hex">#707873</div>
+            <div class="swatch-desc">Secondary text</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #CBC4B8"></div>
+          <div class="swatch-info">
+            <div>Border</div>
+            <div class="swatch-hex">#CBC4B8</div>
+            <div class="swatch-desc">Dividers, outlines</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="color-group">
+      <h3>Semantic Colors</h3>
+      <div class="swatches">
+        
+        <div class="swatch">
+          <div class="swatch-box" style="background: #5E765B"></div>
+          <div class="swatch-info">
+            <div>Success</div>
+            <div class="swatch-hex">#5E765B</div>
+            <div class="swatch-desc">Positive indicators</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #B78324"></div>
+          <div class="swatch-info">
+            <div>Warning</div>
+            <div class="swatch-hex">#B78324</div>
+            <div class="swatch-desc">Caution indicators</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #9A6046"></div>
+          <div class="swatch-info">
+            <div>Error</div>
+            <div class="swatch-hex">#9A6046</div>
+            <div class="swatch-desc">Error states</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-box" style="background: #0F6B6D"></div>
+          <div class="swatch-info">
+            <div>Info</div>
+            <div class="swatch-hex">#0F6B6D</div>
+            <div class="swatch-desc">Informational</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Typography -->
+<div class="section section-alt">
+  <div class="container">
+    <h2 class="section-title">Typography</h2>
+    <div class="type-specimen">
+      <div style="font-family: Inter, Arial, sans-serif; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 8px;">Inter</div>
+      <div style="color: #6B7280; font-size: 13px;">Heading font, weight 700, line height 1.2</div>
+    </div>
+    <div class="type-specimen">
+      <div style="font-family: Inter, Arial, sans-serif; font-size: 16px; font-weight: 400; line-height: 1.6; margin-bottom: 8px;">The quick brown fox jumps over the lazy dog. Inter is used for body text throughout the application.</div>
+      <div style="color: #6B7280; font-size: 13px;">Body font, weight 400, line height 1.6</div>
+    </div>
+    <div class="type-specimen">
+      <div style="font-family: IBM Plex Mono, monospace; font-size: 14px; margin-bottom: 8px;">const theme = { primary: '#0F6B6D' }</div>
+      <div style="color: #6B7280; font-size: 13px;">Monospace font for code</div>
+    </div>
+    <h3 style="font-size: 18px; margin: 24px 0 16px;">Type Scale</h3>
+    <div class="type-scale">
+      <div class="type-scale-item" style="font-size: 12px;">12px</div>
+      <div class="type-scale-item" style="font-size: 14px;">14px</div>
+      <div class="type-scale-item" style="font-size: 16px;">16px</div>
+      <div class="type-scale-item" style="font-size: 18px;">18px</div>
+      <div class="type-scale-item" style="font-size: 20px;">20px</div>
+      <div class="type-scale-item" style="font-size: 24px;">24px</div>
+      <div class="type-scale-item" style="font-size: 30px;">30px</div>
+      <div class="type-scale-item" style="font-size: 36px;">36px</div>
+      <div class="type-scale-item" style="font-size: 48px;">48px</div>
+      <div class="type-scale-item" style="font-size: 60px;">60px</div>
+    </div>
+  </div>
+</div>
+
+<!-- Spacing & Shape -->
+<div class="section">
+  <div class="container">
+    <h2 class="section-title">Spacing &amp; Shape</h2>
+    <p class="section-subtitle">Base unit: 8px. Icon style: outlined.</p>
+    <h3 style="font-size: 18px; margin-bottom: 16px;">Spacing Scale</h3>
+    <div class="spacing-grid">
+      <div class="spacing-box" style="width: 24px; height: 24px;">4</div>
+      <div class="spacing-box" style="width: 24px; height: 24px;">8</div>
+      <div class="spacing-box" style="width: 24px; height: 24px;">12</div>
+      <div class="spacing-box" style="width: 24px; height: 24px;">16</div>
+      <div class="spacing-box" style="width: 24px; height: 24px;">24</div>
+      <div class="spacing-box" style="width: 32px; height: 32px;">32</div>
+      <div class="spacing-box" style="width: 48px; height: 48px;">48</div>
+      <div class="spacing-box" style="width: 64px; height: 64px;">64</div>
+      <div class="spacing-box" style="width: 96px; height: 96px;">96</div>
+    </div>
+    <h3 style="font-size: 18px; margin: 32px 0 16px;">Shadow Levels (subtle)</h3>
+    <div class="shadow-grid">
+      <div class="shadow-card" style="box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);">sm</div>
+      <div class="shadow-card" style="box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);">md</div>
+      <div class="shadow-card" style="box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);">lg</div>
+      <div class="shadow-card" style="box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);">xl</div>
+    </div>
+    <h3 style="font-size: 18px; margin: 32px 0 16px;">Border Radius</h3>
+    <div class="component-row">
+      <div style="width: 80px; height: 80px; background: #0F6B6D20; border: 1px solid #0F6B6D40; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #0F6B6D;">8px</div>
+    </div>
+  </div>
+</div>
+
+<!-- Components -->
+<div class="section section-alt">
+  <div class="container">
+    <h2 class="section-title">Components</h2>
+    <h3 style="font-size: 18px; margin-bottom: 16px;">Buttons</h3>
+    <div class="component-row">
+      <button class="btn btn-primary">Primary</button>
+      <button class="btn btn-secondary">Secondary</button>
+      <button class="btn btn-outline">Outline</button>
+      <button class="btn btn-ghost">Ghost</button>
+      <button class="btn btn-destructive">Destructive</button>
+    </div>
+    <h3 style="font-size: 18px; margin: 24px 0 16px;">Input</h3>
+    <div class="component-row">
+      <input class="input-field" type="text" placeholder="Email address" readonly />
+    </div>
+    <h3 style="font-size: 18px; margin: 24px 0 16px;">Cards</h3>
+    <div class="component-row">
+      <div class="card-demo" style="width: 200px;">
+        <div style="font-weight: 600; margin-bottom: 4px;">Default Card</div>
+        <div style="font-size: 13px; color: #6B7280;">Surface background with border</div>
+      </div>
+      <div class="card-demo" style="width: 200px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);">
+        <div style="font-weight: 600; margin-bottom: 4px;">Elevated Card</div>
+        <div style="font-size: 13px; color: #6B7280;">With shadow from palette</div>
+      </div>
+    </div>
+    <h3 style="font-size: 18px; margin: 24px 0 16px;">Badges</h3>
+    <div class="component-row">
+      <span class="badge" style="background: #0F6B6D1A; color: #0F6B6D;">Primary</span>
+      <span class="badge" style="background: #5E765B1A; color: #5E765B;">Success</span>
+      <span class="badge" style="background: #B783241A; color: #B78324;">Warning</span>
+      <span class="badge" style="background: #9A60461A; color: #9A6046;">Error</span>
+      <span class="badge" style="background: #0F6B6D1A; color: #0F6B6D;">Info</span>
+    </div>
+  </div>
+</div>
+
+<!-- Usage Guidelines -->
+<div class="section">
+  <div class="container">
+    <h2 class="section-title">Usage Guidelines</h2>
+    <h3 style="font-size: 18px; margin-bottom: 16px;">Contrast Ratios</h3>
+    <div class="contrast-grid">
+      
+      <div class="contrast-item">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <div style="width: 40px; height: 40px; border-radius: 8px; background: #F2EFE8; border: 1px solid #CBC4B8; display: flex; align-items: center; justify-content: center; color: #1D2326; font-weight: 700; font-size: 14px;">Aa</div>
+          <div>
+            <div style="font-size: 13px;">Foreground on Background</div>
+            <div class="contrast-ratio contrast-pass">13.8:1</div>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #5E765B;">WCAG AA Pass</div>
+      </div>
+      <div class="contrast-item">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <div style="width: 40px; height: 40px; border-radius: 8px; background: #0F6B6D; border: 1px solid #CBC4B8; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-weight: 700; font-size: 14px;">Aa</div>
+          <div>
+            <div style="font-size: 13px;">White on Primary</div>
+            <div class="contrast-ratio contrast-pass">6.3:1</div>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #5E765B;">WCAG AA Pass</div>
+      </div>
+      <div class="contrast-item">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <div style="width: 40px; height: 40px; border-radius: 8px; background: #6E7758; border: 1px solid #CBC4B8; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-weight: 700; font-size: 14px;">Aa</div>
+          <div>
+            <div style="font-size: 13px;">White on Secondary</div>
+            <div class="contrast-ratio contrast-pass">4.7:1</div>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #5E765B;">WCAG AA Pass</div>
+      </div>
+      <div class="contrast-item">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <div style="width: 40px; height: 40px; border-radius: 8px; background: #FAF8F3; border: 1px solid #CBC4B8; display: flex; align-items: center; justify-content: center; color: #1D2326; font-weight: 700; font-size: 14px;">Aa</div>
+          <div>
+            <div style="font-size: 13px;">Foreground on Surface</div>
+            <div class="contrast-ratio contrast-pass">15.0:1</div>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #5E765B;">WCAG AA Pass</div>
+      </div>
+    </div>
+    <h3 style="font-size: 18px; margin: 32px 0 16px;">Guidelines</h3>
+    <ul style="font-size: 14px; color: #6B7280; padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+      <li>Use primary color for CTAs and active states. Reserve accent for highlights.</li>
+      <li>Use foregroundMuted for secondary text only. Never use it for interactive elements.</li>
+      <li>Maintain minimum 4.5:1 contrast ratio for all body text.</li>
+    </ul>
+  </div>
+</div>
+
+<footer style="padding: 32px 0; text-align: center; font-size: 12px; color: #9CA3AF; border-top: 1px solid #CBC4B8;">
+  Generated by Ideaplaces Style Guide Generator
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,197 @@
+:root {
+  /* Primary Colors */
+  --color-primary: #0F6B6D;
+  --color-primary-light: #3F8C8D;
+  --color-primary-dark: #0C5658;
+
+  /* Secondary Colors */
+  --color-secondary: #6E7758;
+  --color-secondary-light: #8B9276;
+  --color-secondary-dark: #585F46;
+
+  /* Accent */
+  --color-accent: #C06C3D;
+
+  /* Background & Surface */
+  --color-background: #F2EFE8;
+  --color-background-alt: #E7E1D7;
+  --color-surface: #FAF8F3;
+
+  /* Foreground */
+  --color-foreground: #1D2326;
+  --color-foreground-muted: #707873;
+
+  /* Borders */
+  --color-border: #CBC4B8;
+  --color-border-light: #E1DBD1;
+
+  /* Semantic Colors */
+  --color-success: #5E765B;
+  --color-warning: #B78324;
+  --color-error: #9A6046;
+  --color-info: #0F6B6D;
+
+  /* Typography */
+  --font-family: Inter, Arial, sans-serif;
+  --font-family-heading: Inter, Arial, sans-serif;
+  --font-family-mono: IBM Plex Mono, monospace;
+  --font-weight-body: 400;
+  --font-weight-heading: 700;
+  --line-height-body: 1.6;
+  --line-height-heading: 1.2;
+  --font-size-0: 12px;
+  --font-size-1: 14px;
+  --font-size-2: 16px;
+  --font-size-3: 18px;
+  --font-size-4: 20px;
+  --font-size-5: 24px;
+  --font-size-6: 30px;
+  --font-size-7: 36px;
+  --font-size-8: 48px;
+  --font-size-9: 60px;
+
+  /* Spacing */
+  --spacing-base: 8px;
+  --spacing-0: 4px;
+  --spacing-1: 8px;
+  --spacing-2: 12px;
+  --spacing-3: 16px;
+  --spacing-4: 24px;
+  --spacing-5: 32px;
+  --spacing-6: 48px;
+  --spacing-7: 64px;
+  --spacing-8: 96px;
+
+  /* Icon Style */
+  --icon-style: outlined;
+
+  /* Border Radius */
+  --border-radius: 8px;
+  --border-radius-sm: calc(8px / 2);
+  --border-radius-lg: calc(8px * 1.5);
+  --border-radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.1);
+}
+
+/* ==================================================================
+   Additions beyond the generated bundle
+   ==================================================================
+   Two things the generator could not know, added by hand and kept in
+   this file so there is one source of truth per surface.
+
+   1. DARK TOKENS. The export ships light only. This product's frames
+      are near-black, so a light-only system would leave the web UI
+      unable to sit next to its own output.
+   2. RENDER TOKENS. The video palette is fixed in
+      video/src/Captions.tsx and AdVideo.tsx. It is NOT theme-aware —
+      a rendered mp4 has one appearance forever — so those values are
+      absolute, never swapped per theme.
+
+   Regenerate the block above from Styleguide conversation
+   1fc85745-6499-4412-bd76-cbd6a9c119c4; re-apply this block after.
+   ================================================================== */
+
+/* --- dark, keyed off the OS unless a theme is stamped ------------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    /* Teal has to lift off ink to stay legible: #0F6B6D on #12181A
+       measures under 3:1. These are the raised variants. */
+    --color-primary: #2E9B9D;
+    --color-primary-light: #55BDBE;
+    --color-primary-dark: #0F6B6D;
+
+    --color-secondary: #98A17E;
+    --color-secondary-light: #B4BC9C;
+    --color-secondary-dark: #6E7758;
+
+    --color-accent: #DA8A5A;
+
+    /* Grounds carry the same slight blue bias as the render ink, so a
+       video frame embedded in the UI does not look like a hole. */
+    --color-background: #101418;
+    --color-background-alt: #161B20;
+    --color-surface: #1C2228;
+
+    --color-foreground: #ECE8DF;
+    --color-foreground-muted: #98A09C;
+
+    --color-border: #2C343A;
+    --color-border-light: #222A30;
+
+    --color-success: #85A181;
+    --color-warning: #D6A340;
+    --color-error: #C08265;
+    --color-info: #2E9B9D;
+
+    /* Shadows do almost nothing on a dark ground; depth comes from the
+       surface steps above. Deepened so what remains is still read. */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.38);
+    --shadow-lg: 0 6px 16px rgba(0, 0, 0, 0.45);
+    --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* --- dark, explicitly chosen ------------------------------------- */
+:root[data-theme="dark"] {
+  --color-primary: #2E9B9D;
+  --color-primary-light: #55BDBE;
+  --color-primary-dark: #0F6B6D;
+  --color-secondary: #98A17E;
+  --color-secondary-light: #B4BC9C;
+  --color-secondary-dark: #6E7758;
+  --color-accent: #DA8A5A;
+  --color-background: #101418;
+  --color-background-alt: #161B20;
+  --color-surface: #1C2228;
+  --color-foreground: #ECE8DF;
+  --color-foreground-muted: #98A09C;
+  --color-border: #2C343A;
+  --color-border-light: #222A30;
+  --color-success: #85A181;
+  --color-warning: #D6A340;
+  --color-error: #C08265;
+  --color-info: #2E9B9D;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 6px 16px rgba(0, 0, 0, 0.45);
+  --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+:root {
+  /* --- claim states -------------------------------------------------
+     The product's one irreducible distinction: a line the pages support
+     versus a line they do not. Mapped onto the palette's editorial
+     earth tones rather than success/error, because a cut is a judgement
+     the engine made, not a form the user filled in wrong. Green and red
+     would read as "you made a mistake"; moss and copper read as
+     "this was weighed". */
+  --claim-kept: var(--color-secondary);   /* moss — sourced, traceable */
+  --claim-cut: var(--color-accent);       /* copper — refused */
+  --claim-exempt: var(--color-foreground-muted); /* subjective, never gated */
+
+  /* --- render tokens: FIXED, never theme-swapped -------------------
+     From video/src/Captions.tsx and AdVideo.tsx. An exported mp4 has
+     one appearance for its whole life, so these must not vary. */
+  --render-ink: #08080C;         /* frame ground */
+  --render-fg: #FFFFFF;          /* caption word, soft/drift/firm */
+  --render-accent: #F5C518;      /* hard energy, chip, progress, CTA */
+  --render-hot: #FF3B30;         /* emphasis, only atop accent */
+  --render-stroke: rgba(4, 4, 8, 0.62);
+  --render-shadow: 0 10px 30px rgba(0, 0, 0, 0.85), 0 3px 10px rgba(0, 0, 0, 0.8);
+  --render-face: Inter, -apple-system, system-ui, sans-serif;
+
+  /* Geometry. BAND_TOP is round(1920 * 2/3) — captions are clipped
+     below it so a word can never cover the subject of the shot. */
+  --render-w: 1080px;
+  --render-h: 1920px;
+  --render-band-top: 66.667%;
+  --render-band-inset: 200px;
+  --render-side: 64px;
+  --render-fps: 30;
+}
