@@ -51,7 +51,6 @@ GATED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/v1/videos/[^/]+/regenerate/?$")),
     ("POST", re.compile(r"^/v1/briefs/?$")),
     ("POST", re.compile(r"^/v1/ads/image/?$")),
-    ("POST", re.compile(r"^/v1/image/?$")),
 )
 
 

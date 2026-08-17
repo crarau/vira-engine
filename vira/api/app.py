@@ -45,7 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from vira.api import auth
 from vira.api.db import init_db
 from vira.api.routes import (
-    ads, briefs, image, corpus, companies, jobs, reviews, suggest, terac, videos,
+    ads, briefs, corpus, companies, jobs, reviews, suggest, terac, videos,
 )
 from vira.api.worker import OUT_DIR
 
@@ -98,7 +98,6 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=OUT_DIR), name="media")
 
 app.include_router(corpus.router)
-app.include_router(image.router)
 app.include_router(ads.router)
 app.include_router(companies.router)
 app.include_router(videos.router)
@@ -155,7 +154,7 @@ async def root() -> dict[str, object]:
             "creative lanes": "/v1/lanes",
             "what is in the corpus": "/v1/corpus/stats",
             "generate a video": "POST /v1/videos",
-            "generate an image": "POST /v1/image",
+            "generate an ad image": "POST /v1/ads/image",
         },
     }
 

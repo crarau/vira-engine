@@ -342,7 +342,7 @@ Authorization: Bearer <token>
 | `POST /v1/videos/{id}/regenerate` | `GET /healthz`, `GET /` |
 | `POST /v1/briefs` | `GET /v1/review-batches/{token}` |
 | `POST /v1/ads/image` | `POST /v1/review-batches/{token}/votes` |
-| `POST /v1/image` | `POST /v1/companies` |
+| | `POST /v1/companies` |
 
 The gated set is written out endpoint by endpoint rather than derived from the
 HTTP method, and that is the important part. **The judge flow can never be

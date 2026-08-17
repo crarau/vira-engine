@@ -51,7 +51,7 @@ from vira.adimage import (
     produce_ad_image,
 )
 from vira.api import worker
-from vira.api.routes.image import _admit
+from vira.api.imagelimit import admit
 from vira.api.schemas import ScoreOut
 from vira.brief import Brief, slugify
 from vira.lanes import BY_NAME, get as get_lane
@@ -226,7 +226,7 @@ async def create_ad_image(body: AdImageRequest, request: Request):
 
     # Shared with POST /v1/image, not a second bucket: both endpoints spend on
     # the same Gemini account and a per-endpoint limit would not be a limit.
-    await _admit(time.strftime("%Y-%m-%d"))
+    await admit(time.strftime("%Y-%m-%d"))
 
     def note(message: str, stage: str = "ads", **data: Any) -> None:
         log.info("[%s %s] %s", slug, stage, message)

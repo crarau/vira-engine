@@ -23,7 +23,7 @@ import pytest
 from vira import adimage
 from vira.api.app import app
 from vira.api.routes import ads as ads_routes
-from vira.api.routes import image as image_routes
+from vira.api import imagelimit
 from vira.models import Beat, Remix, Score
 from vira.still import build_still_props, stressed_index
 from tests.conftest import make_company, make_score, make_trend
@@ -53,12 +53,10 @@ def client() -> httpx.AsyncClient:
 
 @pytest.fixture(autouse=True)
 def fresh_rate_limit():
-    """The burst window is process-wide and shared with /v1/image."""
-    image_routes._recent.clear()
-    image_routes._today.clear()
+    """The burst window is process-wide, so it leaks between tests."""
+    imagelimit.reset()
     yield
-    image_routes._recent.clear()
-    image_routes._today.clear()
+    imagelimit.reset()
 
 
 # --- the printed frame ----------------------------------------------------
@@ -441,10 +439,12 @@ async def test_a_full_brief_posted_at_the_top_level_is_accepted_here_too(client,
     assert [r.trend_key for r in brief.trend_refs] == ["VIRA-TR-1"]
 
 
-async def test_the_rate_limit_is_the_same_bucket_as_the_image_proxy(client, route, monkeypatch):
-    monkeypatch.setattr(image_routes, "_BURST_PER_MINUTE", 1)
+async def test_the_rate_limit_still_applies_after_the_proxy_was_removed(client, route, monkeypatch):
+    """The limiter used to live in the proxy module. Removing that route must
+    not remove the ceiling from the endpoint that actually spends money."""
+    monkeypatch.setattr(imagelimit, "BURST_PER_MINUTE", 1)
     async with client as c:
         first = await c.post("/v1/ads/image", json={"brand": "Sunday Oats", "product": "oats"})
-        second = await c.post("/v1/image", json={"prompt": "a jar of oats"})
+        second = await c.post("/v1/ads/image", json={"brand": "Sunday Oats", "product": "oats"})
     assert first.status_code == 200
-    assert second.status_code == 429, "one shared ceiling, not two"
+    assert second.status_code == 429, "the ceiling went with the proxy"

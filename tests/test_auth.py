@@ -69,10 +69,13 @@ async def test_generation_is_open_when_no_token_is_configured(client, no_such_co
     assert r.status_code == 404, "the route answered, so the gate let it through"
 
 
-async def test_the_image_proxy_is_open_when_no_token_is_configured(client):
+async def test_the_withdrawn_image_proxy_is_gone_not_merely_unrouted(client):
+    """It was public and documented, so a 404 is the contract now."""
     async with client as c:
-        r = await c.post("/v1/image", json={"prompt": "a jar", "aspect_ratio": "7:3"})
-    assert r.status_code == 422, "422 is the route's own validation, not the gate"
+        r = await c.post("/v1/image", json={"prompt": "a jar"})
+        models = await c.get("/v1/image/models")
+    assert r.status_code == 404
+    assert models.status_code == 404
 
 
 # --- configured: the four write endpoints need the header ----------------
@@ -83,7 +86,6 @@ async def test_the_image_proxy_is_open_when_no_token_is_configured(client):
     ("POST", "/v1/videos/11111111-1111-1111-1111-111111111111/regenerate", {}),
     ("POST", "/v1/briefs", {"brand": {"name": "X"}}),
     ("POST", "/v1/ads/image", {"brand": "Sunday Oats", "product": "oats"}),
-    ("POST", "/v1/image", {"prompt": "a jar"}),
 ])
 async def test_a_configured_token_is_required_on_every_write(client, gated, method, path, body):
     async with client as c:
@@ -122,7 +124,7 @@ async def test_healthz_is_never_gated(client, gated):
     assert r.status_code == 200
 
 
-@pytest.mark.parametrize("path", ["/v1/lanes", "/v1/image/models"])
+@pytest.mark.parametrize("path", ["/v1/lanes", "/"])
 async def test_reads_are_never_gated(client, gated, path):
     async with client as c:
         r = await c.get(path)
